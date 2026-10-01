@@ -133,6 +133,7 @@ app.get('/register/:slug', (req, res) => {
 app.use(express.static(PUBLIC_DIR));
 
 app.get('/healthz', (req, res) => res.status(200).json({ status: 'ok' }));
+app.get('/api/health', (req, res) => res.status(200).json({ status: 'ok', service: 'camfed-attendance-system' }));
 
 app.get('/api/event/:slug', (req, res) => {
   const e = findEventBySlug(req.params.slug);
