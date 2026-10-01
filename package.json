@@ -1,0 +1,17 @@
+{
+  "name": "camfed-attendance-system",
+  "version": "2.1.0",
+  "description": "CAMFED attendance registration system with Vercel-compatible Express deployment.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "pdfkit": "^0.17.2"
+  }
+}
