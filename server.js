@@ -21,9 +21,13 @@ const SESSION_SECRET = process.env.SESSION_SECRET || 'camfed-local-session-secre
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
-const DATA_DIR = path.join(ROOT, 'data');
-const SIG_DIR = path.join(ROOT, 'signatures');
-const PDF_DIR = path.join(ROOT, 'pdfs');
+// Vercel's function bundle is read-only. Use its writable scratch directory
+// there, while keeping the existing project-local layout for local installs.
+const STORAGE_ROOT = process.env.CAMFED_STORAGE_DIR ||
+  (process.env.VERCEL ? path.join(require('os').tmpdir(), 'camfed-registration') : ROOT);
+const DATA_DIR = path.join(STORAGE_ROOT, 'data');
+const SIG_DIR = path.join(STORAGE_ROOT, 'signatures');
+const PDF_DIR = path.join(STORAGE_ROOT, 'pdfs');
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
 [DATA_DIR, SIG_DIR, PDF_DIR].forEach(dir => fs.mkdirSync(dir, { recursive: true }));
 
