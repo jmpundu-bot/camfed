@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Registration Successful | CAMFED</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+.success-wrap{max-width:680px;margin:8vh auto;padding:24px;text-align:center}
+.success-card{background:#fff;border-radius:16px;padding:clamp(24px,5vw,48px);box-shadow:0 8px 30px rgba(0,0,0,.08)}
+.success-mark{width:76px;height:76px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;background:#e6f6ec;color:#187744;font-size:42px;font-weight:700}
+.success-card h1{margin:12px 0;color:#187744}.success-card p{font-size:1.05rem;line-height:1.7}.event-name{font-weight:700}.register-again-btn{display:inline-block;margin-top:18px;padding:13px 22px;border-radius:8px;background:#187744;color:#fff;text-decoration:none;font-weight:700}.register-again-btn:hover{background:#125c34}
+</style>
+</head>
+<body class="purple-page">
+<main class="success-wrap"><section class="success-card">
+<img src="/images/camfed-logo.png" class="logo" alt="CAMFED logo" onerror="this.style.display='none'">
+<div class="success-mark" aria-hidden="true">✓</div>
+<h1>Thank You for Your Successful Registration!</h1>
+<p>Your attendance registration has been submitted successfully.</p>
+<p id="eventMessage">Thank you for registering with CAMFED.</p>
+<p>Return to the registration form.</p>
+<a id="registerAgainButton" class="register-again-btn" href="/register">Return to CAMFED Attendance Registration</a>
+</section></main>
+<script>
+const params = new URLSearchParams(window.location.search);
+const eventName = params.get('event');
+const returnUrl = params.get('returnUrl');
+// Only allow a local registration path, never an external redirect.
+if (returnUrl && returnUrl.startsWith('/register') && !returnUrl.startsWith('//')) {
+  document.getElementById('registerAgainButton').href = returnUrl;
+}
+if (eventName) {
+  const message = document.getElementById('eventMessage');
+  message.textContent = `Your registration for ${eventName} has been received.`;
+}
+</script>
+</body>
+</html>

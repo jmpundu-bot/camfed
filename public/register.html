@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CAMFED Attendance Registration</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="purple-page">
+<div class="container">
+  <div class="card">
+    <img src="/images/camfed-logo.png" class="logo" alt="CAMFED logo" onerror="this.style.display='none'">
+    <h1>CAMFED Attendance Registration</h1>
+    <div id="eventInfo" class="event-box">Loading event information...</div>
+    <form id="attendanceForm">
+      <label>1. Full Name<input id="fullName" required></label>
+      <label>2. Gender<select id="gender" required><option value="">Select</option><option>Male</option><option>Female</option><option>Other</option></select></label>
+      <label>3. Designation<input id="designation" required></label>
+      <label>4. Organisation<input id="organisation" required></label>
+      <label>5. Mobile Mobile Number<input id="phoneNumber" type="tel" inputmode="numeric" placeholder="0971234567" required></label>
+      <label>6. NRC Number<input id="nrcNumber" placeholder="123456/12/1" required></label>
+      <label>7. District<input id="district" required></label>
+      <label>8. Mobile Registered Name<input id="mobileRegisteredName" required></label>
+      <div class="photo-section">
+        <label>9. Live Photo</label>
+        <p>A live photo is required for this registration.</p>
+        <video id="photoVideo" autoplay playsinline muted hidden></video>
+        <canvas id="photoCanvas" hidden></canvas>
+        <img id="photoPreview" alt="Live photo preview" hidden>
+        <div class="photo-actions">
+          <button type="button" id="startCamera" class="secondary">Open Camera</button>
+          <button type="button" id="capturePhoto" hidden>Capture Photo</button>
+          <button type="button" id="retakePhoto" class="secondary" hidden>Retake Photo</button>
+        </div>
+        <p id="photoStatus" aria-live="polite">A live photo is required before registration.</p>
+      </div>
+      <div class="event-box"><strong></strong><p></p><p id="gpsStatus" aria-live="polite"></p></div>
+      <div class="signature-section"><label>10. Signature</label><canvas id="signaturePad" width="900" height="300"></canvas><button type="button" id="clearSignature" class="secondary">Clear Signature</button></div>
+      <button id="submitBtn" type="submit">Submit Registration</button>
+      <p id="message" class="message"></p>
+    </form>
+  </div>
+</div>
+<script>
+const form=document.getElementById('attendanceForm'), canvas=document.getElementById('signaturePad'), ctx=canvas.getContext('2d');
+const message=document.getElementById('message'), submitBtn=document.getElementById('submitBtn');
+let drawing=false, gpsLocation=null, livePhoto=null, cameraStream=null, pathParts=location.pathname.split('/').filter(Boolean), eventSlug=pathParts[0]==='register' ? (pathParts[1] || '') : '';
+const photoVideo=document.getElementById('photoVideo'), photoCanvas=document.getElementById('photoCanvas'), photoPreview=document.getElementById('photoPreview'), photoStatus=document.getElementById('photoStatus');
+function stopCamera(){if(cameraStream){cameraStream.getTracks().forEach(track=>track.stop());cameraStream=null;}photoVideo.srcObject=null;}
+document.getElementById('startCamera').onclick=async()=>{try{if(!navigator.mediaDevices?.getUserMedia)throw new Error('Camera access requires HTTPS or localhost and a supported browser.');stopCamera();cameraStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:false});photoVideo.srcObject=cameraStream;photoVideo.hidden=false;photoPreview.hidden=true;document.getElementById('capturePhoto').hidden=false;document.getElementById('retakePhoto').hidden=true;photoStatus.textContent='Camera is ready. Position your face and capture the photo.';}catch(err){photoStatus.textContent='Could not open camera: '+err.message;}};
+document.getElementById('capturePhoto').onclick=()=>{if(!cameraStream||!photoVideo.videoWidth){photoStatus.textContent='Camera is not ready yet. Please wait and try again.';return;}const maxW=900, scale=Math.min(1,maxW/photoVideo.videoWidth);photoCanvas.width=Math.round(photoVideo.videoWidth*scale);photoCanvas.height=Math.round(photoVideo.videoHeight*scale);photoCanvas.getContext('2d').drawImage(photoVideo,0,0,photoCanvas.width,photoCanvas.height);livePhoto=photoCanvas.toDataURL('image/jpeg',0.82);photoPreview.src=livePhoto;photoPreview.hidden=false;photoVideo.hidden=true;document.getElementById('capturePhoto').hidden=true;document.getElementById('retakePhoto').hidden=false;stopCamera();photoStatus.textContent='Live photo captured. Retake it if the image is unclear.';};
+document.getElementById('retakePhoto').onclick=()=>{livePhoto=null;photoPreview.hidden=true;document.getElementById('retakePhoto').hidden=true;document.getElementById('startCamera').click();};
+function getGpsLocation(){const status=document.getElementById('gpsStatus');if(!('geolocation' in navigator)){status.textContent='GPS is unavailable in this browser. Registration cannot proceed without location.';return Promise.resolve(null);}status.textContent='Requesting location permission…';return new Promise(resolve=>navigator.geolocation.getCurrentPosition(pos=>{gpsLocation={latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy,locationCapturedAt:new Date(pos.timestamp).toISOString()};status.textContent=`Location captured (accuracy about ${Math.round(pos.coords.accuracy)} metres).`;resolve(gpsLocation);},err=>{gpsLocation=null;status.textContent=err.code===1?'Location permission denied. Please allow location access to register.':'Could not get your location. Check GPS/location settings and try again.';resolve(null);},{enableHighAccuracy:true,timeout:10000,maximumAge:0}));}
+function setupCanvas(){ const r=canvas.getBoundingClientRect(), d=window.devicePixelRatio||1; canvas.width=r.width*d; canvas.height=r.height*d; ctx.setTransform(d,0,0,d,0,0); ctx.lineWidth=2; ctx.lineCap='round'; }
+setupCanvas(); window.addEventListener('resize',setupCanvas);
+function point(e){const r=canvas.getBoundingClientRect(); const t=e.touches?.[0]||e; return {x:t.clientX-r.left,y:t.clientY-r.top};}
+function start(e){drawing=true; const p=point(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); e.preventDefault();}
+function move(e){if(!drawing)return; const p=point(e); ctx.lineTo(p.x,p.y); ctx.stroke(); e.preventDefault();}
+function end(){drawing=false;}
+canvas.addEventListener('pointerdown',start); canvas.addEventListener('pointermove',move); canvas.addEventListener('pointerup',end); canvas.addEventListener('pointerleave',end);
+document.getElementById('clearSignature').onclick=()=>{ctx.clearRect(0,0,canvas.clientWidth,canvas.clientHeight);};
+async function loadEvent(){try{const url=eventSlug?`/api/event/${encodeURIComponent(eventSlug)}`:'/api/event'; const r=await fetch(url); const e=await r.json(); if(!r.ok)throw new Error(e.error); eventSlug=e.slug; document.getElementById('eventInfo').innerHTML=`<strong>${e.name}</strong><br>Date: ${e.date}<br>Venue: ${e.venue}`; if(e.expired){closeRegistration('Registration for this event has expired. Registration links are valid for two hours after an event is created. Please contact the event administrator.');}}catch(err){document.getElementById('eventInfo').textContent=err.message;}}
+function closeRegistration(reason){Array.from(form.elements).forEach(el=>el.disabled=true);submitBtn.disabled=true;submitBtn.textContent='Registration Closed';message.className='message error';message.textContent=reason;}
+loadEvent();
+form.addEventListener('submit',async e=>{e.preventDefault(); message.textContent=''; const signature=canvas.toDataURL('image/png');
+ if(signature.length<500) {message.className='message error'; message.textContent='Please provide your signature.'; return;}
+ if(!livePhoto){message.className='message error';message.textContent='Please open the camera and capture your live photo before submitting.';return;}
+ const data={fullName:fullName.value,gender:gender.value,designation:designation.value,organisation:organisation.value,phoneNumber:phoneNumber.value.trim(),nrcNumber:nrcNumber.value.trim(),district:district.value,mobileRegisteredName:mobileRegisteredName.value,signature,livePhoto,eventSlug};
+ if(!/^(09|07)[0-9]{8}$/.test(data.phoneNumber)){message.className='message error';message.textContent='Enter a valid Zambian mobile number.';return;}
+ if(!/^[0-9]{6}\/[0-9]{2}\/[0-9]$/.test(data.nrcNumber)){message.className='message error';message.textContent='Use NRC format 123456/12/1.';return;}
+ submitBtn.disabled=true; submitBtn.textContent='Getting location…';
+ try{const gps=await getGpsLocation(); if(!gps || !Number.isFinite(gps.latitude) || !Number.isFinite(gps.longitude)){throw new Error('Registration cannot proceed without your GPS location. Allow location permission and ensure location services are enabled, then try again.');} Object.assign(data,gps); submitBtn.textContent='Submitting...'; const r=await fetch('/api/attendees',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const out=await r.json();if(!r.ok){if(r.status===410)closeRegistration(out.error);throw new Error(out.error);}window.location.href=`/registration-success?event=${encodeURIComponent(document.querySelector('#eventInfo strong')?.textContent||'CAMFED event')}&returnUrl=${encodeURIComponent(window.location.pathname)}`; return;}catch(err){message.className='message error';message.textContent=err.message;}finally{if(submitBtn.textContent!=='Registration Closed'){submitBtn.disabled=false;submitBtn.textContent='Submit Registration';}}
+});
+</script>
+</body></html>

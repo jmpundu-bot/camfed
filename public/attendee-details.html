@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Registration Details | CAMFED</title><link rel="stylesheet" href="/style.css">
+<style>
+.details-wrap{max-width:760px;margin:5vh auto;padding:20px}.details-card{background:#fff;border-radius:14px;padding:clamp(20px,4vw,38px);box-shadow:0 8px 30px rgba(0,0,0,.08)}.details-card h1{color:#187744}.details-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.detail{padding:12px;background:#f6f8f6;border-radius:8px;overflow-wrap:anywhere}.detail small{display:block;color:#526052;margin-bottom:5px}.detail strong{font-weight:600}.back-btn{display:inline-block;margin-top:22px;padding:12px 18px;background:#187744;color:white;text-decoration:none;border-radius:8px;font-weight:700}.status{padding:12px;background:#f6f8f6;border-radius:8px}@media(max-width:560px){.details-grid{grid-template-columns:1fr}}
+</style></head>
+<body><main class="details-wrap"><section class="details-card">
+<img src="/images/camfed-logo.png" alt="CAMFED logo" class="logo" onerror="this.style.display='none'">
+<h1>My Registration Details</h1><p id="status" class="status">Loading your registration details…</p><div id="details" class="details-grid" hidden></div><a class="back-btn" href="/" id="homeBtn">Back to Home</a>
+</section></main>
+<script>
+const token = new URLSearchParams(location.search).get('token');
+const statusBox = document.getElementById('status');
+const details = document.getElementById('details');
+const fields = [['Event','eventName'],['Event Date','eventDate'],['Venue','venue'],['Full Name','fullName'],['Gender','gender'],['Designation','designation'],['Organisation','organisation'],['Phone Number','phoneNumber'],['NRC Number','nrcNumber'],['District','district'],['Mobile Registered Name','mobileRegisteredName'],['Registration Date','registeredAt']];
+function formatDate(value){if(!value)return '—';const d=new Date(value);return Number.isNaN(d.getTime())?value:d.toLocaleString();}
+async function load(){if(!token||!/^[a-f0-9]{64}$/.test(token)){statusBox.textContent='A valid private registration link is required to view these details.';return;}try{const r=await fetch('/api/registration-details/'+encodeURIComponent(token));const out=await r.json();if(!r.ok)throw new Error(out.error||'Could not load details.');for(const [label,key] of fields){const box=document.createElement('div');box.className='detail';const small=document.createElement('small');small.textContent=label;const strong=document.createElement('strong');strong.textContent=key==='registeredAt'?formatDate(out[key]):(out[key]||'—');box.append(small,strong);details.appendChild(box);}statusBox.textContent='Your registration was successful. Please review the details below.';details.hidden=false;}catch(e){statusBox.textContent=e.message;}}
+load();
+</script></body></html>

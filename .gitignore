@@ -1,0 +1,6 @@
+node_modules/
+.env
+data/data.json
+database/*.db
+signatures/*
+pdfs/*
