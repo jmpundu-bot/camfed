@@ -495,9 +495,13 @@ app.use((req,res,next)=>{if(req.method==='GET'&&req.accepts('html'))return res.s
 app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:'Internal server error.'});});
 
 let server;
+// Vercel detects and invokes the exported Express app as a serverless function.
+// Local installations still start their own HTTP listener below.
+module.exports = app;
 databaseReady.then(async () => {
   await cleanupExpiredAttendees();
   setInterval(() => cleanupExpiredAttendees().catch(err => console.error('Attendee retention check failed:', err.message)), RETENTION_CHECK_INTERVAL_MS).unref();
+  if (process.env.VERCEL) return;
   server = app.listen(PORT,()=>{console.log(`CAMFED Attendance System running at http://localhost:${PORT}`);console.log(`Admin: http://localhost:${PORT}/admin`);console.log(`Login username: ${ADMIN_USERNAME}`);console.log(`Login password: ${ADMIN_PASSWORD}`);});
 }).catch(err => {
   console.error('Could not initialize Neon database:', err.message);
