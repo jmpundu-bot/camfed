@@ -5,8 +5,8 @@
 .secondary-link{background:#64748b}
 
 
-/* Fill the complete viewport with the CAMFED Zambia photo on desktop and mobile. */
-body.purple-page{background-color:#622577;background-image:url('/images/camfed-background.jpg');background-size:100% 100%;background-position:center;background-repeat:no-repeat;background-attachment:fixed;min-height:100vh;min-height:100dvh;}
+/* Keep the complete CAMFED Zambia background photo visible on every screen size. */
+body.purple-page{background-color:#622577;background-image:url('/images/camfed-background.jpg');background-size:contain;background-position:center;background-repeat:no-repeat;background-attachment:fixed;min-height:100vh;}
 body.purple-page .container{min-height:100vh;padding-top:32px;padding-bottom:32px;}
 @media(max-width:700px){body.purple-page .container{padding:12px 8px;}}
 
