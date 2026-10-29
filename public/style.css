@@ -5,8 +5,8 @@
 .secondary-link{background:#64748b}
 
 
-/* CAMFED green and gold surround the application panels. */
-body.purple-page{background:#006b3f;background:linear-gradient(125deg,#004f31 0%,#00843d 42%,#e4bd25 72%,#006b3f 100%);min-height:100vh;}
+/* CAMFED orange, black, red and purple frame the application panels. */
+body.purple-page{background:#24102f;background:linear-gradient(125deg,#f58220 0%,#17131b 30%,#c8102e 62%,#542583 100%);min-height:100vh;}
 body.purple-page .container{min-height:100vh;padding-top:32px;padding-bottom:32px;}
 @media(max-width:700px){body.purple-page .container{padding:12px 8px;}}
 
