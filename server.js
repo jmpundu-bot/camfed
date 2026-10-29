@@ -3,7 +3,9 @@ const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { getSql } = require('./lib/db');
+const db = require('./lib/db');
+const { getSql } = db;
+const neonStorage = require('./lib/neon-storage');
 
 // Load .env without requiring a native module or an extra dependency.
 const envPath = path.join(__dirname, '.env');
@@ -32,7 +34,7 @@ const PDF_DIR = path.join(STORAGE_ROOT, 'pdfs');
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
 [DATA_DIR, SIG_DIR, PDF_DIR].forEach(dir => fs.mkdirSync(dir, { recursive: true }));
 
-function loadData() {
+function loadLegacyData() {
   if (!fs.existsSync(DATA_FILE)) return { nextEventId: 1, nextAttendeeId: 1, events: [], attendees: [] };
   try {
     const d = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
@@ -42,17 +44,11 @@ function loadData() {
     return { nextEventId: 1, nextAttendeeId: 1, events: [], attendees: [] };
   }
 }
-let data = loadData();
-function saveData() {
-  const tmp = DATA_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
-  fs.renameSync(tmp, DATA_FILE);
-}
-
 function slugify(value) { return String(value).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 70); }
-function uniqueSlug(name) {
+async function uniqueSlug(name) {
   const base = slugify(name) || 'event'; let slug = base; let n = 2;
-  while (data.events.some(e => e.slug === slug)) slug = `${base}-${n++}`;
+  const existing = new Set(await db.listEventSlugs());
+  while (existing.has(slug)) slug = `${base}-${n++}`;
   return slug;
 }
 function signSession(username) {
@@ -79,25 +75,40 @@ function requireAdmin(req, res, next) {
   if (!verifySession(getCookie(req, 'camfed_session'))) return res.status(401).json({ error: 'Admin login required.' });
   next();
 }
-function saveSignature(dataUrl, attendeeId) {
+async function saveSignature(dataUrl, attendeeId) {
   if (!/^data:image\/png;base64,/.test(dataUrl || '')) throw new Error('Invalid signature image.');
   const buffer = Buffer.from(dataUrl.replace(/^data:image\/png;base64,/, ''), 'base64');
   if (buffer.length < 100 || buffer.length > 2 * 1024 * 1024) throw new Error('Signature image size is invalid.');
   const filename = `signature-${attendeeId}-${Date.now()}.png`;
-  fs.writeFileSync(path.join(SIG_DIR, filename), buffer);
-  return filename;
+  return storeImage(filename, buffer, 'image/png');
 }
-function saveLivePhoto(dataUrl, attendeeId) {
+async function saveLivePhoto(dataUrl, attendeeId) {
   if (!/^data:image\/(jpeg|jpg|png);base64,/.test(dataUrl || '')) throw new Error('Invalid live photo image.');
   const match = dataUrl.match(/^data:image\/(jpeg|jpg|png);base64,/);
   const ext = match[1] === 'png' ? 'png' : 'jpg';
   const buffer = Buffer.from(dataUrl.replace(/^data:image\/(jpeg|jpg|png);base64,/, ''), 'base64');
   if (buffer.length < 100 || buffer.length > 5 * 1024 * 1024) throw new Error('Live photo size is invalid. Please retake the photo.');
   const filename = `photo-${attendeeId}-${Date.now()}.${ext}`;
+  return storeImage(filename, buffer, `image/${ext === 'jpg' ? 'jpeg' : ext}`);
+}
+async function storeImage(filename, buffer, contentType) {
+  if (process.env.VERCEL || process.env.NEON_STORAGE_BUCKET || process.env.AWS_S3_BUCKET) {
+    await neonStorage.put(`attendees/${filename}`, buffer, contentType);
+    return `attendees/${filename}`;
+  }
   fs.writeFileSync(path.join(SIG_DIR, filename), buffer);
   return filename;
 }
-function findEventBySlug(slug) { return data.events.find(e => e.slug === slug); }
+async function getStoredImage(key) {
+  if (key && (key.startsWith('attendees/') || process.env.VERCEL)) return neonStorage.get(key);
+  return fs.readFileSync(path.join(SIG_DIR, path.basename(key)));
+}
+async function removeStoredImage(key) {
+  if (!key) return;
+  if (key.startsWith('attendees/')) return neonStorage.remove(key);
+  deleteStoredFile(SIG_DIR, key);
+}
+function findEventBySlug(slug) { return db.getEventBySlug(slug); }
 const DEFAULT_REGISTRATION_HOURS = 2;
 const MAX_REGISTRATION_HOURS = 720; // 30 days
 function eventExpiryMs(event) {
@@ -108,7 +119,7 @@ function eventExpiryMs(event) {
   return Number.isFinite(created) ? created + DEFAULT_REGISTRATION_HOURS * 60 * 60 * 1000 : 0;
 }
 function isRegistrationExpired(event) { return Date.now() >= eventExpiryMs(event); }
-function attendeesForEvent(eventId) { return data.attendees.filter(a => a.event_id === Number(eventId)).sort((a,b) => a.id-b.id); }
+function attendeesForEvent(eventId) { return db.listAttendeesForEvent(eventId); }
 
 // Automatically remove attendee personal data three calendar months after registration.
 // This includes the JSON record, signature/photo files, and generated PDFs containing those records.
@@ -130,50 +141,34 @@ function deleteStoredFile(directory, filename) {
   try { if (fs.existsSync(target) && fs.statSync(target).isFile()) fs.unlinkSync(target); }
   catch (err) { console.error(`Could not delete expired attendee file ${safeName}:`, err.message); }
 }
-function cleanupExpiredAttendees() {
+async function cleanupExpiredAttendees() {
   const now = new Date();
   const cutoff = subtractCalendarMonths(now, ATTENDEE_RETENTION_MONTHS);
-  const expired = data.attendees.filter(a => {
-    const createdAt = Date.parse(a.created_at || '');
-    return Number.isFinite(createdAt) && createdAt < cutoff.getTime();
-  });
+  const expired = await db.deleteExpiredAttendees(cutoff);
   if (!expired.length) return 0;
 
-  const expiredIds = new Set(expired.map(a => a.id));
   const affectedEventIds = new Set(expired.map(a => Number(a.event_id)));
-  const previousAttendees = data.attendees;
-  data.attendees = data.attendees.filter(a => !expiredIds.has(a.id));
-  try {
-    saveData();
-  } catch (err) {
-    data.attendees = previousAttendees;
-    console.error('Automatic attendee-retention cleanup could not save data:', err.message);
-    return 0;
-  }
 
   for (const attendee of expired) {
-    deleteStoredFile(SIG_DIR, attendee.signature_file);
-    deleteStoredFile(SIG_DIR, attendee.photo_file);
+    await removeStoredImage(attendee.signature_file).catch(err => console.error('Could not remove expired signature:', err.message));
+    await removeStoredImage(attendee.photo_file).catch(err => console.error('Could not remove expired photo:', err.message));
   }
   // PDFs may contain expired personal information. Remove them so an admin can
   // regenerate a fresh PDF containing only attendees still within retention.
   for (const eventId of affectedEventIds) {
-    const event = data.events.find(e => Number(e.id) === eventId);
+    const event = await db.getEventById(eventId);
     if (event?.slug) deleteStoredFile(PDF_DIR, `${String(event.slug).replace(/[^a-z0-9-]/gi, '_')}-attendance.pdf`);
   }
   console.log(`Automatic retention cleanup deleted ${expired.length} attendee record(s) older than three calendar months.`);
   return expired.length;
 }
-// Run at startup, on incoming requests (covers a server that was asleep), and daily while online.
-cleanupExpiredAttendees();
-setInterval(cleanupExpiredAttendees, RETENTION_CHECK_INTERVAL_MS).unref();
 function publicBaseUrl(req) {
   return String(process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
 }
-function buildCsv(event) {
+async function buildCsv(event) {
   const rows = [
     ['Provider Id*', 'Reciever Msisdn*', 'Amount*', 'Remarks', 'Payer Wallet Type Id*(N-Normal/S-Salary)'],
-    ...attendeesForEvent(event.id).map(a => ['', a.phone_number, '', '', ''])
+    ...(await attendeesForEvent(event.id)).map(a => ['', a.phone_number, '', '', ''])
   ];
   return '\uFEFF' + rows.map(row => row.map(csvCell).join(',')).join('\r\n');
 }
@@ -198,71 +193,79 @@ async function makeQrPdfBuffer(event, link) {
 
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true }));
+const databaseReady = db.initializeDatabase(loadLegacyData());
+app.use((req, res, next) => {
+  databaseReady.then(() => cleanupExpiredAttendees()).then(() => next()).catch(next);
+});
 app.get('/api/test', async (req, res) => {
   if (!process.env.DATABASE_URL?.trim()) {
     return res.status(503).json({
       ok: false,
       database: 'disconnected',
+      objectStorage: 'not checked',
       error: 'DATABASE_URL is missing from the deployment environment.',
     });
   }
 
   try {
     await getSql()`SELECT 1`;
-    res.json({ ok: true, database: 'connected' });
+    try {
+      await neonStorage.check();
+      res.json({ ok: true, database: 'connected', objectStorage: 'connected' });
+    } catch (storageErr) {
+      console.error('Neon Object Storage check failed:', storageErr.message);
+      res.status(503).json({ ok: false, database: 'connected', objectStorage: 'disconnected', error: 'Neon Object Storage is unavailable. Check the storage endpoint, bucket name, and credential scopes.' });
+    }
   } catch (err) {
     console.error('Neon connection check failed:', err.message);
     res.status(503).json({
       ok: false,
       database: 'disconnected',
+      objectStorage: 'not checked',
       error: 'Neon is unreachable. Check DATABASE_URL and the Neon project status.',
     });
   }
-});
-app.use((req, res, next) => {
-  try { cleanupExpiredAttendees(); } catch (err) { console.error('Attendee retention check failed:', err.message); }
-  next();
 });
 
 app.get('/', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'admin.html')));
 app.get('/registration-success', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'success.html')));
 app.get('/registration-details', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'attendee-details.html')));
-app.get('/api/registration-details/:token', (req, res) => {
+app.get('/api/registration-details/:token', async (req, res) => {
   const token = String(req.params.token || '');
   if (!/^[a-f0-9]{64}$/.test(token)) return res.status(404).json({ error: 'Registration details could not be found.' });
-  const attendee = data.attendees.find(a => a.confirmation_token === token);
+  const attendee = await db.getAttendeeByToken(token);
   if (!attendee) return res.status(404).json({ error: 'Registration details could not be found.' });
-  const event = data.events.find(e => e.id === attendee.event_id);
+  const event = await db.getEventById(attendee.event_id);
   res.json({ fullName: attendee.full_name, gender: attendee.gender, designation: attendee.designation, organisation: attendee.organisation, phoneNumber: attendee.phone_number, nrcNumber: attendee.nrc_number, district: attendee.district, mobileRegisteredName: attendee.mobile_registered_name, registeredAt: attendee.created_at, eventName: event ? event.name : 'CAMFED event', eventDate: event ? event.date : '', venue: event ? event.venue : '' });
 });
 app.get('/admin.html', (req, res) => res.redirect('/admin'));
-app.get('/register', (req, res) => {
-  const event = [...data.events].sort((a,b) => b.id-a.id)[0];
+app.get('/register', async (req, res) => {
+  const event = await db.getLatestEvent();
   return event ? res.redirect(`/register/${encodeURIComponent(event.slug)}`) : res.sendFile(path.join(PUBLIC_DIR, 'register.html'));
 });
-app.get('/register/:slug', (req, res) => {
-  if (!findEventBySlug(req.params.slug)) return res.status(404).sendFile(path.join(PUBLIC_DIR, '404.html'));
+app.get('/register/:slug', async (req, res) => {
+  if (!await findEventBySlug(req.params.slug)) return res.status(404).sendFile(path.join(PUBLIC_DIR, '404.html'));
   res.sendFile(path.join(PUBLIC_DIR, 'register.html'));
 });
 app.use(express.static(PUBLIC_DIR));
 
-app.get('/api/event/:slug', (req, res) => {
-  const e = findEventBySlug(req.params.slug);
+app.get('/api/event/:slug', async (req, res) => {
+  const e = await findEventBySlug(req.params.slug);
   if (!e) return res.status(404).json({ error: 'Event not found.' });
   res.json({ id:e.id, name:e.name, date:e.date, venue:e.venue, slug:e.slug, expiresAt:new Date(eventExpiryMs(e)).toISOString(), expired:isRegistrationExpired(e) });
 });
-app.get('/api/event', (req, res) => {
-  const e = [...data.events].sort((a,b) => b.id-a.id)[0];
+app.get('/api/event', async (req, res) => {
+  const e = await db.getLatestEvent();
   if (!e) return res.status(404).json({ error: 'No event has been created yet.' });
   res.json({ id:e.id, name:e.name, date:e.date, venue:e.venue, slug:e.slug, expiresAt:new Date(eventExpiryMs(e)).toISOString(), expired:isRegistrationExpired(e) });
 });
 
-app.post('/api/attendees', (req, res) => {
+app.post('/api/attendees', async (req, res) => {
   const b = req.body;
   const required = ['fullName','gender','designation','organisation','phoneNumber','nrcNumber','district','mobileRegisteredName','signature','livePhoto'];
   if (required.some(k => !String(b[k] || '').trim())) return res.status(400).json({ error: 'Please complete all required fields.' });
-  const event = b.eventSlug ? findEventBySlug(b.eventSlug) : [...data.events].sort((a,b) => b.id-a.id)[0];
+  const event = b.eventSlug ? await findEventBySlug(b.eventSlug) : await db.getLatestEvent();
   if (!event) return res.status(400).json({ error: 'No event is available for registration.' });
   if (isRegistrationExpired(event)) return res.status(410).json({ error: 'Registration for this event has expired. Please contact the event administrator.' });
   const phone = String(b.phoneNumber).trim();
@@ -270,7 +273,7 @@ app.post('/api/attendees', (req, res) => {
   if (!/^(09|07)[0-9]{8}$/.test(phone)) return res.status(400).json({ error: 'Enter a valid Zambian mobile number, e.g. 0971234567.' });
   if (!/^[0-9]{6}\/[0-9]{2}\/[0-9]$/.test(nrc)) return res.status(400).json({ error: 'Enter NRC in the format 123456/12/1.' });
   // Prevent duplicate registrations for the same event. Phone and NRC are unique identifiers.
-  const eventAttendees = attendeesForEvent(event.id);
+  const eventAttendees = await attendeesForEvent(event.id);
   if (eventAttendees.some(a => String(a.phone_number).trim() === phone)) {
     return res.status(409).json({ error: 'This phone number is already registered for this event. Please check the details or contact the event administrator.' });
   }
@@ -283,38 +286,34 @@ app.post('/api/attendees', (req, res) => {
   const accuracy = b.accuracy === undefined || b.accuracy === null ? null : Number(b.accuracy);
   const hasValidGps = Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
   if (!hasValidGps) return res.status(400).json({ error: 'GPS location is required. Registration is blocked until location permission is granted and valid coordinates are available. No attendee details have been saved.' });
-  const id = data.nextAttendeeId;
   const confirmationToken = crypto.randomBytes(32).toString('hex');
+  const uploadId = crypto.randomUUID();
   let signatureFile;
   let photoFile;
   try {
-    signatureFile = saveSignature(String(b.signature), id);
-    photoFile = saveLivePhoto(String(b.livePhoto), id);
+    signatureFile = await saveSignature(String(b.signature), uploadId);
+    photoFile = await saveLivePhoto(String(b.livePhoto), uploadId);
   } catch (e) {
     // Clean up a partial image if either image fails validation.
     for (const filename of [signatureFile, photoFile]) {
       if (filename) {
-        const imagePath = path.join(SIG_DIR, path.basename(filename));
-        if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
+        await removeStoredImage(filename).catch(() => {});
       }
     }
     return res.status(400).json({ error: e.message });
   }
-  data.nextAttendeeId++;
-  data.attendees.push({ id, full_name:String(b.fullName).trim(), gender:String(b.gender).trim(), designation:String(b.designation).trim(), organisation:String(b.organisation).trim(), phone_number:phone, nrc_number:nrc, district:String(b.district).trim(), mobile_registered_name:String(b.mobileRegisteredName).trim(), signature_file:signatureFile, photo_file:photoFile, event_id:event.id, latitude, longitude, gps_accuracy_m:Number.isFinite(accuracy) && accuracy >= 0 ? accuracy : null, gps_captured_at:b.locationCapturedAt ? String(b.locationCapturedAt).slice(0, 40) : null, confirmation_token:confirmationToken, created_at:new Date().toISOString() });
+  let attendee;
   try {
-    saveData();
+    attendee = await db.createAttendee({ full_name:String(b.fullName).trim(), gender:String(b.gender).trim(), designation:String(b.designation).trim(), organisation:String(b.organisation).trim(), phone_number:phone, nrc_number:nrc, district:String(b.district).trim(), mobile_registered_name:String(b.mobileRegisteredName).trim(), signature_file:signatureFile, photo_file:photoFile, event_id:event.id, latitude, longitude, gps_accuracy_m:Number.isFinite(accuracy) && accuracy >= 0 ? accuracy : null, gps_captured_at:b.locationCapturedAt ? String(b.locationCapturedAt).slice(0, 40) : null, confirmation_token:confirmationToken, created_at:new Date().toISOString() });
   } catch (e) {
     console.error('Could not save attendee registration:', e);
-    data.attendees = data.attendees.filter(a => a.id !== id);
     for (const filename of [signatureFile, photoFile]) {
-      const imagePath = path.join(SIG_DIR, path.basename(filename));
-      if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
+      await removeStoredImage(filename).catch(() => {});
     }
-    data.nextAttendeeId = id;
-    return res.status(500).json({ error: 'Registration could not be saved. Check that the project data folder is writable, then try again.' });
+    if (e.code === '23505') return res.status(409).json({ error: 'This phone number or NRC number is already registered for this event.' });
+    return res.status(500).json({ error: 'Registration could not be saved to the database. Please try again.' });
   }
-  res.status(201).json({ message:'Registration successful.', id, confirmationToken });
+  res.status(201).json({ message:'Registration successful.', id: attendee.id, confirmationToken });
 });
 
 app.post('/api/admin/login', (req, res) => {
@@ -326,75 +325,64 @@ app.post('/api/admin/login', (req, res) => {
 });
 app.post('/api/admin/logout', (req,res) => { res.setHeader('Set-Cookie','camfed_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({message:'Logged out.'}); });
 app.get('/api/admin/me', requireAdmin, (req,res) => res.json({ username:ADMIN_USERNAME }));
-app.get('/api/admin/events', requireAdmin, (req,res) => res.json([...data.events].sort((a,b)=>b.id-a.id).map(e => ({...e, attendee_count:attendeesForEvent(e.id).length}))));
-app.post('/api/admin/events', requireAdmin, (req,res) => {
+app.get('/api/admin/events', requireAdmin, async (req,res) => res.json(await db.listEvents()));
+app.post('/api/admin/events', requireAdmin, async (req,res) => {
   const {name,date,venue}=req.body;
   const hours = Number(req.body.registrationHours ?? DEFAULT_REGISTRATION_HOURS);
   if (!String(name||'').trim() || !String(date||'').trim() || !String(venue||'').trim()) return res.status(400).json({error:'Event name, date and venue are required.'});
   if (!Number.isInteger(hours) || hours < 1 || hours > MAX_REGISTRATION_HOURS) return res.status(400).json({error:`Registration link validity must be a whole number from 1 to ${MAX_REGISTRATION_HOURS} hours.`});
   const createdAt = new Date();
-  const e={id:data.nextEventId++,name:String(name).trim(),date:String(date).trim(),venue:String(venue).trim(),slug:uniqueSlug(name),created_at:createdAt.toISOString(),registration_hours:hours,registration_expires_at:new Date(createdAt.getTime()+hours*60*60*1000).toISOString()};
-  data.events.push(e); saveData();
+  const e=await db.createEvent({name:String(name).trim(),date:String(date).trim(),venue:String(venue).trim(),slug:await uniqueSlug(name),created_at:createdAt.toISOString(),registration_hours:hours,registration_expires_at:new Date(createdAt.getTime()+hours*60*60*1000).toISOString()});
   const link = `${publicBaseUrl(req)}/register/${e.slug}`;
   res.status(201).json({id:e.id,slug:e.slug,link,expiresAt:e.registration_expires_at,registrationHours:hours,message:`Event created. The registration link will expire in ${hours} hour(s). Share the link or download the QR-code PDF from the event card.`});
 });
-app.patch('/api/admin/events/:id/expiry', requireAdmin, (req,res) => {
-  const event = data.events.find(e => Number(e.id) === Number(req.params.id));
-  if (!event) return res.status(404).json({error:'Event not found.'});
+app.patch('/api/admin/events/:id/expiry', requireAdmin, async (req,res) => {
   const hours = Number(req.body.registrationHours);
   if (!Number.isInteger(hours) || hours < 1 || hours > MAX_REGISTRATION_HOURS) return res.status(400).json({error:`Registration link validity must be a whole number from 1 to ${MAX_REGISTRATION_HOURS} hours.`});
-  // Changing validity starts a new countdown from the moment the admin saves this setting.
-  event.registration_hours = hours;
-  event.registration_expires_at = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
-  saveData();
+  const event = await db.updateEventExpiry(req.params.id, hours, new Date(Date.now() + hours * 60 * 60 * 1000).toISOString());
+  if (!event) return res.status(404).json({error:'Event not found.'});
   res.json({id:event.id, registrationHours:hours, expiresAt:event.registration_expires_at, expired:false, message:`Registration link updated. It will expire in ${hours} hour(s) from now.`});
 });
-app.delete('/api/admin/events/:id', requireAdmin, (req,res) => {
+app.delete('/api/admin/events/:id', requireAdmin, async (req,res) => {
   const eventId = Number(req.params.id);
-  const eventIndex = data.events.findIndex(e => e.id === eventId);
-  if (eventIndex < 0) return res.status(404).json({ error: 'Event not found.' });
+  const event = await db.getEventById(eventId);
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
 
   // Remove attendee records and their signature images together with the event.
-  const removedAttendees = data.attendees.filter(a => a.event_id === eventId);
+  const removedAttendees = await attendeesForEvent(eventId);
   for (const attendee of removedAttendees) {
     for (const imageFile of [attendee.signature_file, attendee.photo_file]) {
-      if (imageFile) {
-        const imagePath = path.join(SIG_DIR, path.basename(imageFile));
-        if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
-      }
+      await removeStoredImage(imageFile);
     }
   }
-  data.attendees = data.attendees.filter(a => a.event_id !== eventId);
-  const [removedEvent] = data.events.splice(eventIndex, 1);
-  saveData();
+  await db.deleteEvent(eventId);
 
   // Remove this event's generated attendance PDF, if one exists.
-  const safeSlug = String(removedEvent.slug || '').replace(/[^a-z0-9-]/gi, '_');
+  const safeSlug = String(event.slug || '').replace(/[^a-z0-9-]/gi, '_');
   const pdfPath = path.join(PDF_DIR, `${safeSlug}-attendance.pdf`);
   if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
 
   res.json({ message: 'Event and its attendee records deleted.', deletedAttendees: removedAttendees.length });
 });
-app.get('/api/admin/events/:id/attendees', requireAdmin, (req,res) => {
-  const e=data.events.find(x=>x.id===Number(req.params.id)); if(!e)return res.status(404).json({error:'Event not found.'});
-  res.json({event:e,attendees:attendeesForEvent(e.id)});
+app.get('/api/admin/events/:id/attendees', requireAdmin, async (req,res) => {
+  const e=await db.getEventById(req.params.id); if(!e)return res.status(404).json({error:'Event not found.'});
+  res.json({event:e,attendees:await attendeesForEvent(e.id)});
 });
 function csvCell(value) {
   // Quote every cell and escape embedded quotes. Keep phone numbers as text in the CSV.
   return '"' + String(value ?? '').replace(/"/g, '""') + '"';
 }
-app.get('/api/admin/events/:id/csv', requireAdmin, (req,res) => {
-  const e = data.events.find(x => x.id === Number(req.params.id));
+app.get('/api/admin/events/:id/csv', requireAdmin, async (req,res) => {
+  const e = await db.getEventById(req.params.id);
   if (!e) return res.status(404).json({ error: 'Event not found.' });
   const safe = e.slug.replace(/[^a-z0-9-]/gi, '_');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${safe}-attendees.csv"`);
-  res.send(buildCsv(e));
+  res.send(await buildCsv(e));
 });
-app.delete('/api/admin/attendees/:id', requireAdmin, (req,res) => {
-  const i=data.attendees.findIndex(a=>a.id===Number(req.params.id)); if(i<0)return res.status(404).json({error:'Attendee not found.'});
-  const a=data.attendees[i]; data.attendees.splice(i,1); saveData();
-  for(const f of [a.signature_file,a.photo_file]){if(f){const p=path.join(SIG_DIR,path.basename(f));if(fs.existsSync(p))fs.unlinkSync(p);}}
+app.delete('/api/admin/attendees/:id', requireAdmin, async (req,res) => {
+  const a=await db.deleteAttendee(req.params.id); if(!a)return res.status(404).json({error:'Attendee not found.'});
+  for(const f of [a.signature_file,a.photo_file]) await removeStoredImage(f);
   res.json({message:'Attendee deleted.'});
 });
 
@@ -403,7 +391,7 @@ function fitText(doc,text,x,y,width,options={}){
   doc.font(options.font||'Helvetica').fontSize(size);
   doc.text(String(text??''),x,y,{width,height:options.height||20,ellipsis:true,align:options.align||'left',lineBreak:false,continued:false});
 }
-function makePdf(event,attendees,filePath){
+async function makePdf(event,attendees,filePath){
   const doc=new PDFDocument({size:'A4',layout:'landscape',margins:{top:28,bottom:28,left:28,right:28},bufferPages:true});
   const stream=fs.createWriteStream(filePath);doc.pipe(stream);
   const logoPath=path.join(PUBLIC_DIR,'images','camfed-logo.png');
@@ -438,7 +426,7 @@ function makePdf(event,attendees,filePath){
   let y=102;
   let rowOnPage=0;
   pageHeader();
-  attendees.forEach((a,index)=>{
+  for (const [index, a] of attendees.entries()) {
     if(rowOnPage >= rowsPerPage || y+rowH>pageBottom){doc.addPage();pageHeader();y=102;rowOnPage=0;}
     // All registered details are kept on ONE horizontal row for each person.
     const vals=[
@@ -455,30 +443,26 @@ function makePdf(event,attendees,filePath){
       ''
     ];
     let x=tableX;
-    vals.forEach((v,i)=>{
+    for (const [i, v] of vals.entries()) {
       doc.rect(x,y,cols[i],rowH).stroke();
       if(i===9){
-        const sigName=a.signature_file ? path.basename(a.signature_file) : '';
-        const sig=path.join(SIG_DIR,sigName);
-        if(sigName && fs.existsSync(sig)) {
-          try { doc.image(sig,x+4,y+4,{fit:[cols[i]-8,rowH-8],align:'center',valign:'center'}); }
+        if(a.signature_file) {
+          try { doc.image(await getStoredImage(a.signature_file),x+4,y+4,{fit:[cols[i]-8,rowH-8],align:'center',valign:'center'}); }
           catch(imageErr) { console.error('Skipping unreadable signature image for attendee',a.id,imageErr.message); }
         }
       } else if(i===10){
-        const photoName=a.photo_file ? path.basename(a.photo_file) : '';
-        const photo=path.join(SIG_DIR,photoName);
-        if(photoName && fs.existsSync(photo)) {
-          try { doc.image(photo,x+4,y+2,{fit:[cols[i]-8,rowH-4],align:'center',valign:'center'}); }
+        if(a.photo_file) {
+          try { doc.image(await getStoredImage(a.photo_file),x+4,y+2,{fit:[cols[i]-8,rowH-4],align:'center',valign:'center'}); }
           catch(imageErr) { console.error('Skipping unreadable live photo for attendee',a.id,imageErr.message); }
         }
       } else {
         fitText(doc,v,x+2,y+5,cols[i]-4,{size:i===1?5.7:5.5,height:11,align:i===0?'center':'left'});
       }
       x+=cols[i];
-    });
+    }
     y+=rowH;
     rowOnPage++;
-  });
+  }
 
   const range=doc.bufferedPageRange();
   for(let i=range.start;i<range.start+range.count;i++){
@@ -488,11 +472,19 @@ function makePdf(event,attendees,filePath){
   doc.end();
   return new Promise((resolve,reject)=>{stream.on('finish',()=>resolve(filePath));stream.on('error',reject);});
 }
-app.get('/api/admin/events/:id/pdf',requireAdmin,async(req,res)=>{const e=data.events.find(x=>x.id===Number(req.params.id));if(!e)return res.status(404).json({error:'Event not found.'});const a=attendeesForEvent(e.id);if(!a.length)return res.status(400).json({error:'No attendee details are available yet, so an attendance PDF cannot be generated.'});const safe=e.slug.replace(/[^a-z0-9-]/gi,'_');const filePath=path.join(PDF_DIR,`${safe}-attendance.pdf`);try{await makePdf(e,a,filePath);res.download(filePath,`${safe}-attendance.pdf`);}catch(err){console.error(err);res.status(500).json({error:'PDF generation failed.'});}});
+app.get('/api/admin/events/:id/pdf',requireAdmin,async(req,res)=>{const e=await db.getEventById(req.params.id);if(!e)return res.status(404).json({error:'Event not found.'});const a=await attendeesForEvent(e.id);if(!a.length)return res.status(400).json({error:'No attendee details are available yet, so an attendance PDF cannot be generated.'});const safe=e.slug.replace(/[^a-z0-9-]/gi,'_');const filePath=path.join(PDF_DIR,`${safe}-attendance.pdf`);try{await makePdf(e,a,filePath);res.download(filePath,`${safe}-attendance.pdf`);}catch(err){console.error(err);res.status(500).json({error:'PDF generation failed.'});}});
 
 app.use((req,res,next)=>{if(req.method==='GET'&&req.accepts('html'))return res.status(404).sendFile(path.join(PUBLIC_DIR,'404.html'));next();});
 app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:'Internal server error.'});});
 
-const server=app.listen(PORT,()=>{console.log(`CAMFED Attendance System running at http://localhost:${PORT}`);console.log(`Admin: http://localhost:${PORT}/admin`);console.log(`Login username: ${ADMIN_USERNAME}`);console.log(`Login password: ${ADMIN_PASSWORD}`);});
-function shutdown(){server.close(()=>process.exit(0));}
+let server;
+databaseReady.then(async () => {
+  await cleanupExpiredAttendees();
+  setInterval(() => cleanupExpiredAttendees().catch(err => console.error('Attendee retention check failed:', err.message)), RETENTION_CHECK_INTERVAL_MS).unref();
+  server = app.listen(PORT,()=>{console.log(`CAMFED Attendance System running at http://localhost:${PORT}`);console.log(`Admin: http://localhost:${PORT}/admin`);console.log(`Login username: ${ADMIN_USERNAME}`);console.log(`Login password: ${ADMIN_PASSWORD}`);});
+}).catch(err => {
+  console.error('Could not initialize Neon database:', err.message);
+  process.exitCode = 1;
+});
+function shutdown(){if (server) server.close(()=>process.exit(0)); else process.exit(0);}
 process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown);

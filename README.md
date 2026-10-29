@@ -47,7 +47,7 @@ This distribution ZIP starts with an empty data store and does not include previ
 
 The attendee registration page now requires a live photo captured directly from the device camera. On a phone, attendees should open the registration link in a browser, allow camera permission, and select **Open Camera** then **Capture Photo**. The saved photo is included as a **Live Photo** column in the generated A4 landscape attendance PDF. Existing attendee records without a photo will have a blank photo cell.
 
-Camera access requires HTTPS on the deployed site (Vercel provides HTTPS) or localhost during local development. Explain to attendees why photos are collected and restrict access to the stored photos. This application stores photos alongside signature image files in its image storage directory; note that Vercel's serverless filesystem is ephemeral, so production deployments that need persistent photo storage should use object storage such as Supabase Storage.
+Camera access requires HTTPS on the deployed site (Vercel provides HTTPS) or localhost during local development. Explain to attendees why photos are collected and restrict access to the stored photos. Signature images and live photos are uploaded to a private Neon Object Storage bucket when configured. On Vercel, set `AWS_ENDPOINT_URL_S3`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `NEON_STORAGE_BUCKET`, and `AWS_REGION` from the Neon storage guide. The Neon credential needs `storage:read` and `storage:write` scopes. Keep the bucket private.
 
 ## Automatic attendee data deletion after three months
 
@@ -55,4 +55,8 @@ Attendee personal records are automatically deleted three calendar months after 
 
 Cleanup runs when the server starts, on incoming requests, and once every 24 hours while the Node.js process remains running. Records with missing or invalid registration timestamps are left untouched rather than being deleted accidentally.
 
-**Hosting note:** this build stores records and images on the local filesystem (`data/data.json`, `signatures/`, and `pdfs/`). The automatic timer is suitable for a continuously running Node.js server or local installation. On Vercel, the app uses the writable `/tmp` scratch directory so the function can start and write files, but Vercel may discard that storage between function instances or restarts. Do not use this filesystem mode for live attendance records on Vercel; connect a persistent database and object storage before collecting real attendee data. Vercel also does not guarantee continuously running timers, so use a scheduled cleanup job for reliable automatic deletion there.
+**Hosting note:** event and attendee records are stored in Neon Postgres. Signatures and live photos are stored in Neon Object Storage. Generated PDFs are built in temporary local storage and downloaded on demand. Vercel does not guarantee continuously running timers, so use a scheduled cleanup job for reliable automatic deletion there.
+
+## Neon database setup
+
+Set `DATABASE_URL` to the connection string for the Neon branch used by the deployment. At startup, the app creates the `camfed_events` and `camfed_attendees` tables and indexes if they do not exist. If those tables are empty and a local `data/data.json` file exists, its event and attendee records are imported once. New event and attendee changes are written directly to Neon Postgres. Uploaded signature and photo bytes are stored in Neon Object Storage; their object keys are kept on each attendee row. The `/api/test` endpoint checks both the database and object storage connections.
