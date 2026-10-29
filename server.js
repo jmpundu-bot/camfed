@@ -111,6 +111,8 @@ async function removeStoredImage(key) {
 function findEventBySlug(slug) { return db.getEventBySlug(slug); }
 const DEFAULT_REGISTRATION_HOURS = 2;
 const MAX_REGISTRATION_HOURS = 720; // 30 days
+const PROVINCES = ['Lusaka', 'Western', 'Central', 'Muchinga', 'Luapula', 'Northern', 'Eastern'];
+function requestedProvince(value) { return PROVINCES.includes(String(value || '')) ? String(value) : null; }
 function eventExpiryMs(event) {
   const configuredExpiry = Date.parse(event.registration_expires_at || '');
   if (Number.isFinite(configuredExpiry)) return configuredExpiry;
@@ -325,18 +327,26 @@ app.post('/api/admin/login', (req, res) => {
 });
 app.post('/api/admin/logout', (req,res) => { res.setHeader('Set-Cookie','camfed_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({message:'Logged out.'}); });
 app.get('/api/admin/me', requireAdmin, (req,res) => res.json({ username:ADMIN_USERNAME }));
-app.get('/api/admin/events', requireAdmin, async (req,res) => res.json(await db.listEvents()));
+app.get('/api/admin/events', requireAdmin, async (req,res) => {
+  const province = requestedProvince(req.query.province);
+  if (!province) return res.status(400).json({ error: 'Select a valid province.' });
+  res.json(await db.listEvents(province));
+});
 app.post('/api/admin/events', requireAdmin, async (req,res) => {
   const {name,date,venue}=req.body;
+  const province = requestedProvince(req.body.province);
+  if (!province) return res.status(400).json({error:'Select a valid province.'});
   const hours = Number(req.body.registrationHours ?? DEFAULT_REGISTRATION_HOURS);
   if (!String(name||'').trim() || !String(date||'').trim() || !String(venue||'').trim()) return res.status(400).json({error:'Event name, date and venue are required.'});
   if (!Number.isInteger(hours) || hours < 1 || hours > MAX_REGISTRATION_HOURS) return res.status(400).json({error:`Registration link validity must be a whole number from 1 to ${MAX_REGISTRATION_HOURS} hours.`});
   const createdAt = new Date();
-  const e=await db.createEvent({name:String(name).trim(),date:String(date).trim(),venue:String(venue).trim(),slug:await uniqueSlug(name),created_at:createdAt.toISOString(),registration_hours:hours,registration_expires_at:new Date(createdAt.getTime()+hours*60*60*1000).toISOString()});
+  const e=await db.createEvent({name:String(name).trim(),date:String(date).trim(),venue:String(venue).trim(),province,slug:await uniqueSlug(name),created_at:createdAt.toISOString(),registration_hours:hours,registration_expires_at:new Date(createdAt.getTime()+hours*60*60*1000).toISOString()});
   const link = `${publicBaseUrl(req)}/register/${e.slug}`;
   res.status(201).json({id:e.id,slug:e.slug,link,expiresAt:e.registration_expires_at,registrationHours:hours,message:`Event created. The registration link will expire in ${hours} hour(s). Share the link or download the QR-code PDF from the event card.`});
 });
 app.patch('/api/admin/events/:id/expiry', requireAdmin, async (req,res) => {
+  const province = requestedProvince(req.query.province);
+  if (!province || !await db.getEventById(req.params.id, province)) return res.status(404).json({error:'Event not found in this province.'});
   const hours = Number(req.body.registrationHours);
   if (!Number.isInteger(hours) || hours < 1 || hours > MAX_REGISTRATION_HOURS) return res.status(400).json({error:`Registration link validity must be a whole number from 1 to ${MAX_REGISTRATION_HOURS} hours.`});
   const event = await db.updateEventExpiry(req.params.id, hours, new Date(Date.now() + hours * 60 * 60 * 1000).toISOString());
@@ -345,7 +355,8 @@ app.patch('/api/admin/events/:id/expiry', requireAdmin, async (req,res) => {
 });
 app.delete('/api/admin/events/:id', requireAdmin, async (req,res) => {
   const eventId = Number(req.params.id);
-  const event = await db.getEventById(eventId);
+  const province = requestedProvince(req.query.province);
+  const event = province && await db.getEventById(eventId, province);
   if (!event) return res.status(404).json({ error: 'Event not found.' });
 
   // Remove attendee records and their signature images together with the event.
@@ -365,7 +376,8 @@ app.delete('/api/admin/events/:id', requireAdmin, async (req,res) => {
   res.json({ message: 'Event and its attendee records deleted.', deletedAttendees: removedAttendees.length });
 });
 app.get('/api/admin/events/:id/attendees', requireAdmin, async (req,res) => {
-  const e=await db.getEventById(req.params.id); if(!e)return res.status(404).json({error:'Event not found.'});
+  const province = requestedProvince(req.query.province);
+  const e=province && await db.getEventById(req.params.id, province); if(!e)return res.status(404).json({error:'Event not found in this province.'});
   res.json({event:e,attendees:await attendeesForEvent(e.id)});
 });
 function csvCell(value) {
@@ -373,7 +385,8 @@ function csvCell(value) {
   return '"' + String(value ?? '').replace(/"/g, '""') + '"';
 }
 app.get('/api/admin/events/:id/csv', requireAdmin, async (req,res) => {
-  const e = await db.getEventById(req.params.id);
+  const province = requestedProvince(req.query.province);
+  const e = province && await db.getEventById(req.params.id, province);
   if (!e) return res.status(404).json({ error: 'Event not found.' });
   const safe = e.slug.replace(/[^a-z0-9-]/gi, '_');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -381,6 +394,10 @@ app.get('/api/admin/events/:id/csv', requireAdmin, async (req,res) => {
   res.send(await buildCsv(e));
 });
 app.delete('/api/admin/attendees/:id', requireAdmin, async (req,res) => {
+  const province = requestedProvince(req.query.province);
+  const existing = await db.getAttendeeById(req.params.id);
+  const owningEvent = existing && await db.getEventById(existing.event_id, province);
+  if (!owningEvent) return res.status(404).json({ error: 'Attendee not found in this province.' });
   const a=await db.deleteAttendee(req.params.id); if(!a)return res.status(404).json({error:'Attendee not found.'});
   for(const f of [a.signature_file,a.photo_file]) await removeStoredImage(f);
   res.json({message:'Attendee deleted.'});
@@ -414,7 +431,7 @@ async function makePdf(event,attendees,filePath){
     if(fs.existsSync(logoPath)) doc.image(logoPath,28,22,{fit:[115,45]});
     doc.font('Helvetica-Bold').fontSize(16).text('CAMFED ATTENDANCE REGISTER',155,28,{width:600,align:'center'});
     doc.font('Helvetica').fontSize(9).text(event.name,155,49,{width:600,align:'center'});
-    doc.fontSize(8).text(`Date: ${event.date}    Venue: ${event.venue}    Total: ${attendees.length}`,155,64,{width:600,align:'center'});
+    doc.fontSize(8).text(`Province: ${event.province || 'Lusaka'}    Date: ${event.date}    Venue: ${event.venue}    Total: ${attendees.length}`,155,64,{width:600,align:'center'});
     let x=tableX;
     headers.forEach((h,i)=>{
       doc.rect(x,82,cols[i],headerH).stroke();
@@ -472,7 +489,7 @@ async function makePdf(event,attendees,filePath){
   doc.end();
   return new Promise((resolve,reject)=>{stream.on('finish',()=>resolve(filePath));stream.on('error',reject);});
 }
-app.get('/api/admin/events/:id/pdf',requireAdmin,async(req,res)=>{const e=await db.getEventById(req.params.id);if(!e)return res.status(404).json({error:'Event not found.'});const a=await attendeesForEvent(e.id);if(!a.length)return res.status(400).json({error:'No attendee details are available yet, so an attendance PDF cannot be generated.'});const safe=e.slug.replace(/[^a-z0-9-]/gi,'_');const filePath=path.join(PDF_DIR,`${safe}-attendance.pdf`);try{await makePdf(e,a,filePath);res.download(filePath,`${safe}-attendance.pdf`);}catch(err){console.error(err);res.status(500).json({error:'PDF generation failed.'});}});
+app.get('/api/admin/events/:id/pdf',requireAdmin,async(req,res)=>{const province=requestedProvince(req.query.province);const e=province&&await db.getEventById(req.params.id,province);if(!e)return res.status(404).json({error:'Event not found in this province.'});const a=await attendeesForEvent(e.id);if(!a.length)return res.status(400).json({error:'No attendee details are available yet, so an attendance PDF cannot be generated.'});const safe=e.slug.replace(/[^a-z0-9-]/gi,'_');const filePath=path.join(PDF_DIR,`${safe}-attendance.pdf`);try{await makePdf(e,a,filePath);res.download(filePath,`${safe}-attendance.pdf`);}catch(err){console.error(err);res.status(500).json({error:'PDF generation failed.'});}});
 
 app.use((req,res,next)=>{if(req.method==='GET'&&req.accepts('html'))return res.status(404).sendFile(path.join(PUBLIC_DIR,'404.html'));next();});
 app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:'Internal server error.'});});

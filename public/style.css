@@ -5,10 +5,14 @@
 .secondary-link{background:#64748b}
 
 
-/* Purple background outside the main CAMFED registration and admin panels */
-body.purple-page{background:#2b130f;background:linear-gradient(120deg,#2b130f 0%,#4d1c63 28%,#f5a623 52%,#e9b600 68%,#54206d 84%,#2b130f 100%);min-height:100vh;}
+/* CAMFED green and gold surround the application panels. */
+body.purple-page{background:#006b3f;background:linear-gradient(125deg,#004f31 0%,#00843d 42%,#e4bd25 72%,#006b3f 100%);min-height:100vh;}
 body.purple-page .container{min-height:100vh;padding-top:32px;padding-bottom:32px;}
 @media(max-width:700px){body.purple-page .container{padding:12px 8px;}}
+
+.admin-shell{max-width:1440px!important}.admin-card{padding:26px!important;border-radius:20px!important}.dashboard-header{display:flex;align-items:center;gap:18px;padding-bottom:18px;border-bottom:1px solid #e2e8f0}.dashboard-header .logo{margin:0;width:118px;height:64px;object-fit:contain}.dashboard-header h1{text-align:left;margin:0;color:#075b38}.dashboard-header p{margin:5px 0;color:#64748b}.admin-top h2{color:#075b38}.province-layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:22px;margin-top:12px}.province-nav{background:#f1f7f3;border:1px solid #d8e7dc;border-radius:14px;padding:16px;height:max-content;position:sticky;top:16px}.province-nav h3{margin:0 0 10px;color:#075b38}.province-button{display:block;width:100%;text-align:left;background:transparent;color:#244536;margin:3px 0;padding:11px 13px;border-radius:8px}.province-button:hover,.province-button.active{background:#087742;color:white}.province-main{min-width:0}.tablet-brand{background:linear-gradient(135deg,#fff 0%,#f4f8f5 100%);border:7px solid #19231f;border-radius:24px;min-height:116px;display:flex;align-items:center;justify-content:space-between;padding:15px 28px;margin:0 0 15px;box-shadow:0 10px 20px #102b1d22}.tablet-brand img{width:220px;max-height:80px;object-fit:contain}.tablet-brand span{color:#087742;font-weight:700}.province-main>h2{color:#075b38}.province-main .event-form{grid-template-columns:2fr 1fr 2fr 2fr auto}.province-main .event-card{background:#fff}
+@media(max-width:900px){.province-layout{grid-template-columns:1fr}.province-nav{position:static}.province-nav #provinceLinks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}.province-main .event-form{grid-template-columns:1fr}.tablet-brand{border-width:5px}.tablet-brand img{width:160px}}
+@media(max-width:480px){.dashboard-header{align-items:flex-start}.dashboard-header .logo{width:84px;height:52px}.admin-card{padding:14px!important}.tablet-brand{padding:10px 14px}.tablet-brand img{width:120px}.tablet-brand span{font-size:12px}}
 
 .expiry-notice{background:#fff4d6;border-left:4px solid #e9b600;padding:12px;border-radius:6px;color:#43230d}.event-card button{margin-right:5px}.event-card .success{background:#e7f7eb;padding:10px;border-radius:6px}
 
