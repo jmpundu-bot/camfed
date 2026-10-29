@@ -1,7 +1,6 @@
 {
   "name": "camfed-attendance-system",
   "version": "2.0.0",
-   "type": "module",
   "description": "CAMFED attendance registration system without native SQLite dependencies.",
   "main": "server.js",
   "scripts": {
