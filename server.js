@@ -3,6 +3,7 @@ const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { getSql } = require('./lib/db');
 
 // Load .env without requiring a native module or an extra dependency.
 const envPath = path.join(__dirname, '.env');
@@ -197,6 +198,27 @@ async function makeQrPdfBuffer(event, link) {
 
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true }));
+app.get('/api/test', async (req, res) => {
+  if (!process.env.DATABASE_URL?.trim()) {
+    return res.status(503).json({
+      ok: false,
+      database: 'disconnected',
+      error: 'DATABASE_URL is missing from the deployment environment.',
+    });
+  }
+
+  try {
+    await getSql()`SELECT 1`;
+    res.json({ ok: true, database: 'connected' });
+  } catch (err) {
+    console.error('Neon connection check failed:', err.message);
+    res.status(503).json({
+      ok: false,
+      database: 'disconnected',
+      error: 'Neon is unreachable. Check DATABASE_URL and the Neon project status.',
+    });
+  }
+});
 app.use((req, res, next) => {
   try { cleanupExpiredAttendees(); } catch (err) { console.error('Attendee retention check failed:', err.message); }
   next();
