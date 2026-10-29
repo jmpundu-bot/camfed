@@ -1,6 +1,7 @@
 {
   "name": "camfed-attendance-system",
   "version": "2.0.0",
+   "type": "module",
   "description": "CAMFED attendance registration system without native SQLite dependencies.",
   "main": "server.js",
   "scripts": {
@@ -11,6 +12,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.2.0",
     "express": "^5.1.0",
     "pdfkit": "^0.17.2"
   }
