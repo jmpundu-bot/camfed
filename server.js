@@ -53,7 +53,8 @@ async function uniqueSlug(name) {
   return slug;
 }
 function signSession(username) {
-  const payload = Buffer.from(JSON.stringify({ username, exp: Date.now() + 8 * 60 * 60 * 1000 })).toString('base64url');
+  const identity = typeof username === 'string' ? { username, role: 'admin', province: null } : username;
+  const payload = Buffer.from(JSON.stringify({ ...identity, exp: Date.now() + 8 * 60 * 60 * 1000 })).toString('base64url');
   const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
   return `${payload}.${sig}`;
 }
@@ -64,17 +65,30 @@ function verifySession(token) {
     const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
     if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return false;
     const d = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-    return d.username === ADMIN_USERNAME && d.exp > Date.now();
-  } catch { return false; }
+    if (d.exp <= Date.now()) return null;
+    if (d.role === 'admin' && d.username === ADMIN_USERNAME) return { username: d.username, role: 'admin', province: null };
+    if (d.role === 'user' && PROVINCES.includes(d.province)) return { username: d.username, role: 'user', province: d.province };
+    return null;
+  } catch { return null; }
 }
 function getCookie(req, name) {
   const raw = req.headers.cookie || '';
   const match = raw.split(';').map(s => s.trim()).find(s => s.startsWith(name + '='));
   return match ? decodeURIComponent(match.slice(name.length + 1)) : '';
 }
-function requireAdmin(req, res, next) {
-  if (!verifySession(getCookie(req, 'camfed_session'))) return res.status(401).json({ error: 'Admin login required.' });
+async function requireStaff(req, res, next) {
+  let identity = verifySession(getCookie(req, 'camfed_session'));
+  if (!identity) return res.status(401).json({ error: 'Login required.' });
+  if (identity.role === 'user') {
+    const current = await db.getProvincialUser(identity.username);
+    if (!current) return res.status(401).json({ error:'This provincial account is no longer active. Please log in again.' });
+    identity = { username:current.username, role:'user', province:current.province };
+  }
+  req.auth = identity;
   next();
+}
+function requireAdmin(req, res, next) {
+  return requireStaff(req, res, () => req.auth.role === 'admin' ? next() : res.status(403).json({ error: 'Administrator access required.' }));
 }
 async function saveSignature(dataUrl, attendeeId) {
   if (!/^data:image\/png;base64,/.test(dataUrl || '')) throw new Error('Invalid signature image.');
@@ -114,6 +128,10 @@ const DEFAULT_REGISTRATION_HOURS = 2;
 const MAX_REGISTRATION_HOURS = 720; // 30 days
 const PROVINCES = ['Lusaka', 'Western', 'Central', 'Muchinga', 'Luapula', 'Northern', 'Eastern'];
 function requestedProvince(value) { return PROVINCES.includes(String(value || '')) ? String(value) : null; }
+function provinceForRequest(req) {
+  if (req.auth?.role === 'user') return req.auth.province;
+  return requestedProvince(req.query.province ?? req.body?.province);
+}
 function eventExpiryMs(event) {
   const configuredExpiry = Date.parse(event.registration_expires_at || '');
   if (Number.isFinite(configuredExpiry)) return configuredExpiry;
@@ -232,6 +250,7 @@ app.get('/api/test', async (req, res) => {
 
 app.get('/', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'admin.html')));
+app.get('/user', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'admin.html')));
 app.get('/registration-success', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'success.html')));
 app.get('/registration-details', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'attendee-details.html')));
 app.get('/api/registration-details/:token', async (req, res) => {
@@ -319,23 +338,66 @@ app.post('/api/attendees', async (req, res) => {
   res.status(201).json({ message:'Registration successful.', id: attendee.id, confirmationToken });
 });
 
-app.post('/api/admin/login', (req, res) => {
+app.post('/api/admin/login', async (req, res) => {
   const username = String(req.body.username || '').trim();
   const password = String(req.body.password || '');
-  if (username !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Invalid username or password.' });
-  res.setHeader('Set-Cookie', `camfed_session=${encodeURIComponent(signSession(username))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800`);
-  res.json({ message:'Login successful.' });
+  let identity;
+  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) identity = { username, role: 'admin', province: null };
+  else {
+    const user = await db.getProvincialUser(username);
+    if (user) {
+      const hash = await new Promise((resolve, reject) => crypto.scrypt(password, user.password_salt, 64, (err, key) => err ? reject(err) : resolve(key.toString('hex'))));
+      if (crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(user.password_hash, 'hex'))) identity = { username: user.username, role: 'user', province: user.province };
+    }
+  }
+  if (!identity) return res.status(401).json({ error: 'Invalid username or password.' });
+  res.setHeader('Set-Cookie', `camfed_session=${encodeURIComponent(signSession(identity))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800`);
+  res.json({ message:'Login successful.', role:identity.role });
 });
 app.post('/api/admin/logout', (req,res) => { res.setHeader('Set-Cookie','camfed_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({message:'Logged out.'}); });
-app.get('/api/admin/me', requireAdmin, (req,res) => res.json({ username:ADMIN_USERNAME }));
-app.get('/api/admin/events', requireAdmin, async (req,res) => {
-  const province = requestedProvince(req.query.province);
+app.get('/api/admin/me', requireStaff, (req,res) => res.json(req.auth));
+app.get('/api/admin/users', requireAdmin, async (req,res) => res.json(await db.listProvincialUsers()));
+app.post('/api/admin/users', requireAdmin, async (req,res) => {
+  const username = String(req.body.username || '').trim();
+  const password = String(req.body.password || '');
+  const province = requestedProvince(req.body.province);
+  if (!/^[A-Za-z0-9._-]{3,50}$/.test(username)) return res.status(400).json({ error:'Username must be 3–50 characters using letters, numbers, dots, underscores, or hyphens.' });
+  if (username.toLowerCase() === ADMIN_USERNAME.toLowerCase()) return res.status(400).json({ error:'That username is reserved for the administrator.' });
+  if (password.length < 10) return res.status(400).json({ error:'Password must be at least 10 characters.' });
+  if (!province) return res.status(400).json({ error:'Select a valid province.' });
+  if ((await db.listProvincialUsers()).some(user => user.username.toLowerCase() === username.toLowerCase())) return res.status(409).json({ error:'That username is already in use.' });
+  const salt = crypto.randomBytes(16).toString('hex');
+  const passwordHash = await new Promise((resolve,reject)=>crypto.scrypt(password,salt,64,(err,key)=>err?reject(err):resolve(key.toString('hex'))));
+  try { res.status(201).json(await db.createProvincialUser({ username, province, password_salt:salt, password_hash:passwordHash, created_at:new Date().toISOString() })); }
+  catch (err) { if (err.code === '23505') return res.status(409).json({error:'That username is already in use.'}); throw err; }
+});
+app.patch('/api/admin/users/:id', requireAdmin, async (req,res) => {
+  const username = String(req.body.username || '').trim();
+  const province = requestedProvince(req.body.province);
+  const password = String(req.body.password || '');
+  if (!/^[A-Za-z0-9._-]{3,50}$/.test(username) || username.toLowerCase() === ADMIN_USERNAME.toLowerCase()) return res.status(400).json({error:'Enter a valid, non-reserved username.'});
+  if (!province) return res.status(400).json({error:'Select a valid province.'});
+  if (password && password.length < 10) return res.status(400).json({error:'Password must be at least 10 characters.'});
+  const duplicate = (await db.listProvincialUsers()).find(user => user.username.toLowerCase() === username.toLowerCase() && user.id !== Number(req.params.id));
+  if (duplicate) return res.status(409).json({error:'That username is already in use.'});
+  let password_salt = null, password_hash = null;
+  if (password) { password_salt = crypto.randomBytes(16).toString('hex'); password_hash = await new Promise((resolve,reject)=>crypto.scrypt(password,password_salt,64,(err,key)=>err?reject(err):resolve(key.toString('hex')))); }
+  const user = await db.updateProvincialUser(req.params.id,{username,province,password_salt,password_hash});
+  if (!user) return res.status(404).json({error:'Provincial user not found.'});
+  res.json(user);
+});
+app.delete('/api/admin/users/:id', requireAdmin, async (req,res) => {
+  if (!await db.deleteProvincialUser(req.params.id)) return res.status(404).json({error:'Provincial user not found.'});
+  res.json({message:'Provincial user deleted.'});
+});
+app.get('/api/admin/events', requireStaff, async (req,res) => {
+  const province = provinceForRequest(req);
   if (!province) return res.status(400).json({ error: 'Select a valid province.' });
   res.json(await db.listEvents(province));
 });
-app.post('/api/admin/events', requireAdmin, async (req,res) => {
+app.post('/api/admin/events', requireStaff, async (req,res) => {
   const {name,date,venue}=req.body;
-  const province = requestedProvince(req.body.province);
+  const province = provinceForRequest(req);
   if (!province) return res.status(400).json({error:'Select a valid province.'});
   const hours = Number(req.body.registrationHours ?? DEFAULT_REGISTRATION_HOURS);
   if (!String(name||'').trim() || !String(date||'').trim() || !String(venue||'').trim()) return res.status(400).json({error:'Event name, date and venue are required.'});
@@ -345,8 +407,8 @@ app.post('/api/admin/events', requireAdmin, async (req,res) => {
   const link = `${publicBaseUrl(req)}/register/${e.slug}`;
   res.status(201).json({id:e.id,slug:e.slug,link,expiresAt:e.registration_expires_at,registrationHours:hours,message:`Event created. The registration link will expire in ${hours} hour(s). Share the link or download the QR-code PDF from the event card.`});
 });
-app.patch('/api/admin/events/:id/expiry', requireAdmin, async (req,res) => {
-  const province = requestedProvince(req.query.province);
+app.patch('/api/admin/events/:id/expiry', requireStaff, async (req,res) => {
+  const province = provinceForRequest(req);
   if (!province || !await db.getEventById(req.params.id, province)) return res.status(404).json({error:'Event not found in this province.'});
   const hours = Number(req.body.registrationHours);
   if (!Number.isInteger(hours) || hours < 1 || hours > MAX_REGISTRATION_HOURS) return res.status(400).json({error:`Registration link validity must be a whole number from 1 to ${MAX_REGISTRATION_HOURS} hours.`});
@@ -354,9 +416,9 @@ app.patch('/api/admin/events/:id/expiry', requireAdmin, async (req,res) => {
   if (!event) return res.status(404).json({error:'Event not found.'});
   res.json({id:event.id, registrationHours:hours, expiresAt:event.registration_expires_at, expired:false, message:`Registration link updated. It will expire in ${hours} hour(s) from now.`});
 });
-app.delete('/api/admin/events/:id', requireAdmin, async (req,res) => {
+app.delete('/api/admin/events/:id', requireStaff, async (req,res) => {
   const eventId = Number(req.params.id);
-  const province = requestedProvince(req.query.province);
+  const province = provinceForRequest(req);
   const event = province && await db.getEventById(eventId, province);
   if (!event) return res.status(404).json({ error: 'Event not found.' });
 
@@ -376,8 +438,8 @@ app.delete('/api/admin/events/:id', requireAdmin, async (req,res) => {
 
   res.json({ message: 'Event and its attendee records deleted.', deletedAttendees: removedAttendees.length });
 });
-app.get('/api/admin/events/:id/attendees', requireAdmin, async (req,res) => {
-  const province = requestedProvince(req.query.province);
+app.get('/api/admin/events/:id/attendees', requireStaff, async (req,res) => {
+  const province = provinceForRequest(req);
   const e=province && await db.getEventById(req.params.id, province); if(!e)return res.status(404).json({error:'Event not found in this province.'});
   res.json({event:e,attendees:await attendeesForEvent(e.id)});
 });
@@ -385,8 +447,8 @@ function csvCell(value) {
   // Quote every cell and escape embedded quotes. Keep phone numbers as text in the CSV.
   return '"' + String(value ?? '').replace(/"/g, '""') + '"';
 }
-app.get('/api/admin/events/:id/csv', requireAdmin, async (req,res) => {
-  const province = requestedProvince(req.query.province);
+app.get('/api/admin/events/:id/csv', requireStaff, async (req,res) => {
+  const province = provinceForRequest(req);
   const e = province && await db.getEventById(req.params.id, province);
   if (!e) return res.status(404).json({ error: 'Event not found.' });
   const safe = e.slug.replace(/[^a-z0-9-]/gi, '_');
@@ -394,8 +456,8 @@ app.get('/api/admin/events/:id/csv', requireAdmin, async (req,res) => {
   res.setHeader('Content-Disposition', `attachment; filename="${safe}-attendees.csv"`);
   res.send(await buildCsv(e));
 });
-app.get('/api/admin/events/:id/eprf', requireAdmin, async (req, res) => {
-  const province = requestedProvince(req.query.province);
+app.get('/api/admin/events/:id/eprf', requireStaff, async (req, res) => {
+  const province = provinceForRequest(req);
   const event = province && await db.getEventById(req.params.id, province);
   if (!event) return res.status(404).json({ error: 'Event not found.' });
   const attendees = await attendeesForEvent(event.id);
@@ -414,8 +476,8 @@ app.get('/api/admin/events/:id/eprf', requireAdmin, async (req, res) => {
     res.status(500).json({ error: 'EPRF document generation failed. Please check that the EPRF template is valid.' });
   }
 });
-app.delete('/api/admin/attendees/:id', requireAdmin, async (req,res) => {
-  const province = requestedProvince(req.query.province);
+app.delete('/api/admin/attendees/:id', requireStaff, async (req,res) => {
+  const province = provinceForRequest(req);
   const existing = await db.getAttendeeById(req.params.id);
   const owningEvent = existing && await db.getEventById(existing.event_id, province);
   if (!owningEvent) return res.status(404).json({ error: 'Attendee not found in this province.' });
@@ -510,7 +572,7 @@ async function makePdf(event,attendees,filePath){
   doc.end();
   return new Promise((resolve,reject)=>{stream.on('finish',()=>resolve(filePath));stream.on('error',reject);});
 }
-app.get('/api/admin/events/:id/pdf',requireAdmin,async(req,res)=>{const province=requestedProvince(req.query.province);const e=province&&await db.getEventById(req.params.id,province);if(!e)return res.status(404).json({error:'Event not found in this province.'});const a=await attendeesForEvent(e.id);if(!a.length)return res.status(400).json({error:'No attendee details are available yet, so an attendance PDF cannot be generated.'});const safe=e.slug.replace(/[^a-z0-9-]/gi,'_');const filePath=path.join(PDF_DIR,`${safe}-attendance.pdf`);try{await makePdf(e,a,filePath);res.download(filePath,`${safe}-attendance.pdf`);}catch(err){console.error(err);res.status(500).json({error:'PDF generation failed.'});}});
+app.get('/api/admin/events/:id/pdf',requireStaff,async(req,res)=>{const province=provinceForRequest(req);const e=province&&await db.getEventById(req.params.id,province);if(!e)return res.status(404).json({error:'Event not found in this province.'});const a=await attendeesForEvent(e.id);if(!a.length)return res.status(400).json({error:'No attendee details are available yet, so an attendance PDF cannot be generated.'});const safe=e.slug.replace(/[^a-z0-9-]/gi,'_');const filePath=path.join(PDF_DIR,`${safe}-attendance.pdf`);try{await makePdf(e,a,filePath);res.download(filePath,`${safe}-attendance.pdf`);}catch(err){console.error(err);res.status(500).json({error:'PDF generation failed.'});}});
 
 app.use((req,res,next)=>{if(req.method==='GET'&&req.accepts('html'))return res.status(404).sendFile(path.join(PUBLIC_DIR,'404.html'));next();});
 app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:'Internal server error.'});});
