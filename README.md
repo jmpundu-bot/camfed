@@ -31,8 +31,6 @@ Provincial accounts are stored in the `camfed_provincial_users` table, which is 
 
 Admin: http://localhost:3000/admin
 
-Default admin username:
-Default admin password:
 
 
 ## Registration expiry and reports

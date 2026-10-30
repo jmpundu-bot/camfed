@@ -599,7 +599,7 @@ app.get('/api/admin/events/:id/pdf',requireAdmin,async(req,res)=>{const province
 app.get('/api/user/events', requireUser, async (req,res) => res.json(await db.listEvents(req.auth.province)));
 app.post('/api/user/events', requireUser, async (req,res) => {
   const {name,date,venue} = req.body;
-  const hours = Number(req.body.registrationHours ?? DEFAULT_REGISTRATION_HOURS);
+  const hours = DEFAULT_REGISTRATION_HOURS;
   if (!String(name || '').trim() || !String(date || '').trim() || !String(venue || '').trim()) return res.status(400).json({error:'Event name, date and venue are required.'});
   if (!Number.isInteger(hours) || hours < 1 || hours > MAX_REGISTRATION_HOURS) return res.status(400).json({error:`Registration link validity must be a whole number from 1 to ${MAX_REGISTRATION_HOURS} hours.`});
   const createdAt = new Date();
@@ -607,14 +607,7 @@ app.post('/api/user/events', requireUser, async (req,res) => {
   const link = `${publicBaseUrl(req)}/register/${event.slug}`;
   res.status(201).json({id:event.id,slug:event.slug,link,expiresAt:event.registration_expires_at,registrationHours:hours,message:`Event created. The registration link will expire in ${hours} hour(s).`});
 });
-app.patch('/api/user/events/:id/expiry', requireUser, async (req,res) => {
-  const event = await db.getEventById(req.params.id,req.auth.province);
-  if (!event) return res.status(404).json({error:'Event not found in your province.'});
-  const hours = Number(req.body.registrationHours);
-  if (!Number.isInteger(hours) || hours < 1 || hours > MAX_REGISTRATION_HOURS) return res.status(400).json({error:`Registration link validity must be a whole number from 1 to ${MAX_REGISTRATION_HOURS} hours.`});
-  const updated = await db.updateEventExpiry(req.params.id,hours,new Date(Date.now()+hours*60*60*1000).toISOString());
-  res.json({id:updated.id,registrationHours:hours,expiresAt:updated.registration_expires_at,message:`Registration link updated. It will expire in ${hours} hour(s) from now.`});
-});
+app.patch('/api/user/events/:id/expiry', requireUser, (req,res) => res.status(403).json({error:'Only an administrator can change an event registration expiry.'}));
 app.get('/api/user/events/:id/attendees', requireUser, async (req,res) => {
   const event = await db.getEventById(req.params.id,req.auth.province);
   if (!event) return res.status(404).json({error:'Event not found in your province.'});

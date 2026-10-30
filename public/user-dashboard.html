@@ -6,7 +6,7 @@
   <title>User Dashboard | CAMFED Attendance System</title>
   <link rel="stylesheet" href="/style.css">
 </head>
-<body class="purple-page admin-page">
+<body class="purple-page admin-page user-dashboard-page">
   <main class="container admin-shell">
     <section class="card admin-card">
       <header class="dashboard-header">
@@ -20,12 +20,9 @@
           <input id="eventName" placeholder="Event name" required>
           <input id="eventDate" type="date" required>
           <input id="eventVenue" placeholder="Venue" required>
-          <label class="expiry-hours-field">Registration link expires after (hours)
-            <input id="eventExpiryHours" type="number" min="1" max="720" step="1" value="2" required>
-          </label>
           <button type="submit">Create Event</button>
         </form>
-        <p class="hint">Create and manage events for your assigned province. You can change an event link's expiry at any time.</p>
+        <p class="hint">Create and manage events for your assigned province. Registration links use the default expiry; only an administrator can change it later.</p>
         <div id="events" aria-live="polite"></div>
       </section>
       <p id="pageMessage" class="message" aria-live="polite"></p>
@@ -65,7 +62,6 @@
       card.className = 'event-card';
       const expiry = Date.parse(event.registration_expires_at || new Date(Date.parse(event.created_at) + 2 * 60 * 60 * 1000));
       const isExpired = Date.now() >= expiry;
-      const validity = Number(event.registration_hours) || 2;
       const link = `${location.origin}/register/${encodeURIComponent(event.slug)}`;
       card.innerHTML = `
         <h3>${esc(event.name)}</h3>
@@ -73,22 +69,11 @@
         <p><strong>${Number(event.attendee_count) || 0}</strong> attendees</p>
         <p><strong>Registration link:</strong> <a href="/register/${encodeURIComponent(event.slug)}" target="_blank" rel="noopener"><code>${esc(link)}</code></a></p>
         <p><strong>Expires:</strong> ${Number.isFinite(expiry) ? esc(new Date(expiry).toLocaleString()) : 'Unknown'} · <strong>Status:</strong> ${isExpired ? 'Expired' : 'Open'}</p>
-        <div class="expiry-editor"><label>Link validity (hours)<input class="expiry-hours" type="number" min="1" max="720" step="1" value="${validity}" required></label><button type="button" class="save-expiry">Save Expiry / Restart Countdown</button></div>
-        <div class="event-qr"><img loading="lazy" width="160" height="160" alt="Registration QR code for ${esc(event.name)}" src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(link)}"><p>Scan to register for this event</p></div>
         <p class="event-actions"><button type="button" class="copy-link">Copy Link</button> <button type="button" class="view-attendees">View Attendees</button> <button type="button" class="download-qr">Download QR Code (PDF)</button> <button type="button" class="download-pdf">Download PDF</button> <button type="button" class="download-csv">Download CSV</button> <button type="button" class="download-eprf">Download EPRF</button></p>
         <div class="attendee-list" hidden></div>`;
       card.querySelector('.copy-link').addEventListener('click', async () => {
         try { await navigator.clipboard.writeText(link); alert('Registration link copied.'); }
         catch { prompt('Copy this registration link:', link); }
-      });
-      card.querySelector('.save-expiry').addEventListener('click', async () => {
-        const hours = Number(card.querySelector('.expiry-hours').value);
-        if (!Number.isInteger(hours) || hours < 1 || hours > 720) return alert('Enter a whole number from 1 to 720 hours.');
-        if (!confirm(`Set this link to expire in ${hours} hour(s) from now?`)) return;
-        try {
-          await api(provinceUrl(`/api/user/events/${event.id}/expiry`), {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({registrationHours:hours})});
-          await loadEvents();
-        } catch (error) { alert(error.message); }
       });
       card.querySelector('.view-attendees').addEventListener('click', () => showAttendees(event.id, card));
       card.querySelector('.download-qr').addEventListener('click', () => downloadQrPdf(event, link));
@@ -160,9 +145,8 @@
       const button = $('eventForm').querySelector('button[type="submit"]');
       button.disabled = true;
       try {
-        const result = await api('/api/user/events', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('eventName').value,date:$('eventDate').value,venue:$('eventVenue').value,province:selectedProvince,registrationHours:Number($('eventExpiryHours').value)})});
+        const result = await api('/api/user/events', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('eventName').value,date:$('eventDate').value,venue:$('eventVenue').value,province:selectedProvince})});
         $('eventForm').reset();
-        $('eventExpiryHours').value = '2';
         alert(result.message || 'Event created.');
         await loadEvents();
       } catch (error) { alert(error.message); }
