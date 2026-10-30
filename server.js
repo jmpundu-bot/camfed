@@ -66,7 +66,7 @@ function verifySession(token) {
     if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return false;
     const d = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
     if (d.exp <= Date.now()) return null;
-    if (d.role === 'admin' && d.username === ADMIN_USERNAME) return { username: d.username, role: 'admin', province: null };
+    if (d.role === 'admin' && typeof d.username === 'string') return { username: d.username, role: 'admin', province: null };
     if (d.role === 'user' && PROVINCES.includes(d.province)) return { username: d.username, role: 'user', province: d.province };
     return null;
   } catch { return null; }
@@ -76,9 +76,14 @@ function getCookie(req, name) {
   const match = raw.split(';').map(s => s.trim()).find(s => s.startsWith(name + '='));
   return match ? decodeURIComponent(match.slice(name.length + 1)) : '';
 }
-function requireAdmin(req, res, next) {
+async function activeAdmin(identity) {
+  if (identity?.role !== 'admin') return false;
+  if (identity.username.toLowerCase() === ADMIN_USERNAME.toLowerCase()) return true;
+  return Boolean(await db.getAdminUser(identity.username));
+}
+async function requireAdmin(req, res, next) {
   const identity = verifySession(getCookie(req, 'camfed_admin_session'));
-  if (identity?.role !== 'admin') return res.status(401).json({ error:'Admin login required.' });
+  if (!await activeAdmin(identity)) return res.status(401).json({ error:'Admin login required.' });
   req.auth = identity;
   next();
 }
@@ -250,8 +255,8 @@ app.get('/api/test', async (req, res) => {
 
 app.get('/', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'admin-login.html')));
-app.get('/admin/dashboard', (req, res) => {
-  if (verifySession(getCookie(req, 'camfed_admin_session'))?.role !== 'admin') return res.redirect('/admin');
+app.get('/admin/dashboard', async (req, res) => {
+  if (!await activeAdmin(verifySession(getCookie(req, 'camfed_admin_session')))) return res.redirect('/admin');
   res.sendFile(path.join(PUBLIC_DIR, 'admin.html'));
 });
 app.get('/user', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'user-login.html')));
@@ -354,8 +359,17 @@ app.post('/api/attendees', async (req, res) => {
 app.post('/api/admin/login', async (req, res) => {
   const username = String(req.body.username || '').trim();
   const password = String(req.body.password || '');
-  if (username !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) return res.status(401).json({ error:'Invalid admin username or password.' });
-  const identity = { username, role:'admin', province:null };
+  let authenticatedUsername = null;
+  if (username.toLowerCase() === ADMIN_USERNAME.toLowerCase() && password === ADMIN_PASSWORD) authenticatedUsername = ADMIN_USERNAME;
+  if (!authenticatedUsername) {
+    const admin = await db.getAdminUser(username);
+    if (admin) {
+      const hash = await new Promise((resolve,reject)=>crypto.scrypt(password,admin.password_salt,64,(err,key)=>err?reject(err):resolve(key.toString('hex'))));
+      if (crypto.timingSafeEqual(Buffer.from(hash,'hex'),Buffer.from(admin.password_hash,'hex'))) authenticatedUsername = admin.username;
+    }
+  }
+  if (!authenticatedUsername) return res.status(401).json({ error:'Invalid admin username or password.' });
+  const identity = { username:authenticatedUsername, role:'admin', province:null };
   res.setHeader('Set-Cookie', `camfed_admin_session=${encodeURIComponent(signSession(identity))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800`);
   res.json({ message:'Admin login successful.' });
 });
@@ -377,6 +391,19 @@ app.post('/api/admin/logout', (req,res) => { res.setHeader('Set-Cookie','camfed_
 app.post('/api/user/logout', (req,res) => { res.setHeader('Set-Cookie','camfed_user_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({message:'Provincial user logged out.'}); });
 app.get('/api/admin/me', requireAdmin, (req,res) => res.json(req.auth));
 app.get('/api/user/me', requireUser, (req,res) => res.json(req.auth));
+app.get('/api/admin/accounts/admins', requireAdmin, async (req,res) => res.json(await db.listAdminUsers()));
+app.post('/api/admin/accounts/admins', requireAdmin, async (req,res) => {
+  const username = String(req.body.username || '').trim();
+  const password = String(req.body.password || '');
+  if (username.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)) return res.status(400).json({error:'Enter a valid email address to use as the admin username.'});
+  if (username.toLowerCase() === ADMIN_USERNAME.toLowerCase()) return res.status(409).json({error:'That email is already reserved for the primary administrator.'});
+  if (password.length < 10) return res.status(400).json({error:'Password must be at least 10 characters.'});
+  if (await db.getProvincialUser(username)) return res.status(409).json({error:'That email is already assigned to a provincial account.'});
+  const salt = crypto.randomBytes(16).toString('hex');
+  const passwordHash = await new Promise((resolve,reject)=>crypto.scrypt(password,salt,64,(err,key)=>err?reject(err):resolve(key.toString('hex'))));
+  try { res.status(201).json(await db.createAdminUser({username,password_salt:salt,password_hash:passwordHash,created_at:new Date().toISOString()})); }
+  catch (err) { if (err.code === '23505') return res.status(409).json({error:'That admin email is already in use.'}); throw err; }
+});
 app.get('/api/admin/users', requireAdmin, async (req,res) => res.json(await db.listProvincialUsers()));
 app.post('/api/admin/users', requireAdmin, async (req,res) => {
   const username = String(req.body.username || '').trim();
@@ -384,6 +411,7 @@ app.post('/api/admin/users', requireAdmin, async (req,res) => {
   const province = requestedProvince(req.body.province);
   if (username.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)) return res.status(400).json({ error:'Enter a valid email address to use as the username.' });
   if (username.toLowerCase() === ADMIN_USERNAME.toLowerCase()) return res.status(400).json({ error:'That username is reserved for the administrator.' });
+  if (await db.getAdminUser(username)) return res.status(409).json({error:'That email is already assigned to an admin account.'});
   if (password.length < 10) return res.status(400).json({ error:'Password must be at least 10 characters.' });
   if (!province) return res.status(400).json({ error:'Select a valid province.' });
   if ((await db.listProvincialUsers()).some(user => user.username.toLowerCase() === username.toLowerCase())) return res.status(409).json({ error:'That username is already in use.' });
@@ -397,6 +425,7 @@ app.patch('/api/admin/users/:id', requireAdmin, async (req,res) => {
   const province = requestedProvince(req.body.province);
   const password = String(req.body.password || '');
   if (username.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username) || username.toLowerCase() === ADMIN_USERNAME.toLowerCase()) return res.status(400).json({error:'Enter a valid email address to use as the username.'});
+  if (await db.getAdminUser(username)) return res.status(409).json({error:'That email is already assigned to an admin account.'});
   if (!province) return res.status(400).json({error:'Select a valid province.'});
   if (password && password.length < 10) return res.status(400).json({error:'Password must be at least 10 characters.'});
   const duplicate = (await db.listProvincialUsers()).find(user => user.username.toLowerCase() === username.toLowerCase() && user.id !== Number(req.params.id));
