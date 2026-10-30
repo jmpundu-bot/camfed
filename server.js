@@ -81,10 +81,17 @@ async function activeAdmin(identity) {
   if (identity.username.toLowerCase() === ADMIN_USERNAME.toLowerCase()) return true;
   return Boolean(await db.getAdminUser(identity.username));
 }
+function isPrimaryAdmin(identity) {
+  return identity?.role === 'admin' && identity.username.toLowerCase() === ADMIN_USERNAME.toLowerCase();
+}
 async function requireAdmin(req, res, next) {
   const identity = verifySession(getCookie(req, 'camfed_admin_session'));
   if (!await activeAdmin(identity)) return res.status(401).json({ error:'Admin login required.' });
-  req.auth = identity;
+  req.auth = { ...identity, isPrimary: isPrimaryAdmin(identity) };
+  next();
+}
+function requirePrimaryAdmin(req, res, next) {
+  if (!req.auth?.isPrimary) return res.status(403).json({error:'Only the original administrator can create accounts.'});
   next();
 }
 async function requireUser(req, res, next) {
@@ -391,8 +398,11 @@ app.post('/api/admin/logout', (req,res) => { res.setHeader('Set-Cookie','camfed_
 app.post('/api/user/logout', (req,res) => { res.setHeader('Set-Cookie','camfed_user_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({message:'Provincial user logged out.'}); });
 app.get('/api/admin/me', requireAdmin, (req,res) => res.json(req.auth));
 app.get('/api/user/me', requireUser, (req,res) => res.json(req.auth));
-app.get('/api/admin/accounts/admins', requireAdmin, async (req,res) => res.json(await db.listAdminUsers()));
-app.post('/api/admin/accounts/admins', requireAdmin, async (req,res) => {
+app.get('/api/admin/accounts/admins', requireAdmin, async (req,res) => {
+  const admins = await db.listAdminUsers();
+  res.json([{username:ADMIN_USERNAME,created_at:null,isPrimary:true},...admins]);
+});
+app.post('/api/admin/accounts/admins', requireAdmin, requirePrimaryAdmin, async (req,res) => {
   const username = String(req.body.username || '').trim();
   const password = String(req.body.password || '');
   if (username.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)) return res.status(400).json({error:'Enter a valid email address to use as the admin username.'});
@@ -405,7 +415,7 @@ app.post('/api/admin/accounts/admins', requireAdmin, async (req,res) => {
   catch (err) { if (err.code === '23505') return res.status(409).json({error:'That admin email is already in use.'}); throw err; }
 });
 app.get('/api/admin/users', requireAdmin, async (req,res) => res.json(await db.listProvincialUsers()));
-app.post('/api/admin/users', requireAdmin, async (req,res) => {
+app.post('/api/admin/users', requireAdmin, requirePrimaryAdmin, async (req,res) => {
   const username = String(req.body.username || '').trim();
   const password = String(req.body.password || '');
   const province = requestedProvince(req.body.province);
