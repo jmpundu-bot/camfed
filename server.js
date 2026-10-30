@@ -228,7 +228,12 @@ app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true }));
 const databaseReady = db.initializeDatabase(loadLegacyData());
 app.use((req, res, next) => {
-  databaseReady.then(() => cleanupExpiredAttendees()).then(() => next()).catch(next);
+  // Keep the health endpoint available when database initialization itself
+  // fails so deployments can report the actual dependency failure.
+  if (req.path === '/api/test') return next();
+  // Wait for schema initialization, but keep retention work out of the request
+  // path. A transient storage/cleanup failure should not fail every API call.
+  databaseReady.then(() => next(), next);
 });
 app.get('/api/test', async (req, res) => {
   if (!process.env.DATABASE_URL?.trim()) {
@@ -699,20 +704,38 @@ app.get('/api/user/events/:id/pdf', requireUser, async (req,res) => {
 });
 
 app.use((req,res,next)=>{if(req.method==='GET'&&req.accepts('html'))return res.status(404).sendFile(path.join(PUBLIC_DIR,'404.html'));next();});
-app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:'Internal server error.'});});
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+
+  const errorStatus = err.statusCode || err.status;
+  const status = Number.isInteger(errorStatus) && errorStatus >= 400 && errorStatus < 500
+    ? errorStatus
+    : 500;
+  // Body parser errors (invalid JSON / payload too large) should be reported as
+  // client errors rather than appearing as server crashes.
+  const message = status === 400
+    ? 'Invalid request body.'
+    : status === 413
+      ? 'Request body is too large.'
+      : 'Internal server error.';
+  console.error(`Request failed (${req.method} ${req.originalUrl}, ${status}):`, err);
+  res.status(status).json({ error: message });
+});
 
 let server;
 // Vercel detects and invokes the exported Express app as a serverless function.
 // Local installations still start their own HTTP listener below.
 module.exports = app;
 databaseReady.then(async () => {
-  await cleanupExpiredAttendees();
+  await cleanupExpiredAttendees().catch(err => console.error('Initial attendee retention cleanup failed:', err.message));
   setInterval(() => cleanupExpiredAttendees().catch(err => console.error('Attendee retention check failed:', err.message)), RETENTION_CHECK_INTERVAL_MS).unref();
   if (process.env.VERCEL) return;
   server = app.listen(PORT,()=>{console.log(`CAMFED Attendance System running at http://localhost:${PORT}`);console.log(`Admin: http://localhost:${PORT}/admin`);console.log(`Login username: ${ADMIN_USERNAME}`);console.log(`Login password: ${ADMIN_PASSWORD}`);});
 }).catch(err => {
   console.error('Could not initialize Neon database:', err.message);
-  process.exitCode = 1;
+  // A serverless function can still serve /api/test and report the database
+  // failure. Local mode has no useful listener if initialization failed.
+  if (!process.env.VERCEL) process.exitCode = 1;
 });
 function shutdown(){if (server) server.close(()=>process.exit(0)); else process.exit(0);}
 process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown);
