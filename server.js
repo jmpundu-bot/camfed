@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const db = require('./lib/db');
 const { getSql } = db;
 const neonStorage = require('./lib/neon-storage');
+const { createEprfWorkbook } = require('./lib/eprf-xlsx');
 
 // Load .env without requiring a native module or an extra dependency.
 const envPath = path.join(__dirname, '.env');
@@ -392,6 +393,26 @@ app.get('/api/admin/events/:id/csv', requireAdmin, async (req,res) => {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${safe}-attendees.csv"`);
   res.send(await buildCsv(e));
+});
+app.get('/api/admin/events/:id/eprf', requireAdmin, async (req, res) => {
+  const province = requestedProvince(req.query.province);
+  const event = province && await db.getEventById(req.params.id, province);
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+  const attendees = await attendeesForEvent(event.id);
+  if (!attendees.length) return res.status(400).json({ error: 'No participants are registered for this event yet.' });
+  try {
+    const templatePath = path.join(ROOT, 'templates', 'EPRF.xlsx');
+    if (!fs.existsSync(templatePath)) throw new Error('The EPRF template file is missing from the templates folder.');
+    const workbook = createEprfWorkbook(attendees, templatePath);
+    const safeEventName = String(event.name || 'Event').replace(/[\\/:*?"<>|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const filename = `EPRF – ${safeEventName || 'Event'}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="EPRF.xlsx"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.send(workbook);
+  } catch (err) {
+    console.error('EPRF document generation failed:', err);
+    res.status(500).json({ error: 'EPRF document generation failed. Please check that the EPRF template is valid.' });
+  }
 });
 app.delete('/api/admin/attendees/:id', requireAdmin, async (req,res) => {
   const province = requestedProvince(req.query.province);

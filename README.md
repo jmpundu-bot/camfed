@@ -60,3 +60,17 @@ Cleanup runs when the server starts, on incoming requests, and once every 24 hou
 ## Neon database setup
 
 Set `DATABASE_URL` to the connection string for the Neon branch used by the deployment. At startup, the app creates the `camfed_events` and `camfed_attendees` tables and indexes if they do not exist. If those tables are empty and a local `data/data.json` file exists, its event and attendee records are imported once. New event and attendee changes are written directly to Neon Postgres. Uploaded signature and photo bytes are stored in Neon Object Storage; their object keys are kept on each attendee row. The `/api/test` endpoint checks both the database and object storage connections.
+
+
+## EPRF document downloads
+
+The administrator event card includes a **Download EPRF** action. It uses the original workbook template at `templates/EPRF.xlsx` and populates participant rows beginning at row 8 using each event's existing registration records:
+
+- District (`district`)
+- Participant name (`full_name`)
+- Designation (`designation`)
+- Phone number (`phone_number`)
+
+The phone number is reused from the existing registration field and is written as text so leading zeroes are retained. The participant count is written beside the `Total` label. The participant table expands to the exact number of registered participants, with no fixed participant-row limit. The Total row is placed immediately after the final participant (for example, 100 participants occupy rows 8–107 and Total appears on row 108). Later template sections move with the Total row, retaining the template's formatting and manually completed columns. The downloaded file is named `EPRF – [Event Name].xlsx`.
+
+Keep `templates/EPRF.xlsx` in place when deploying the application; it is the source template for every EPRF download. No additional attendee registration fields are required.

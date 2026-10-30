@@ -16,7 +16,7 @@
       <label>2. Gender<select id="gender" required><option value="">Select</option><option>Male</option><option>Female</option></select></label>
       <label>3. Designation<input id="designation" required></label>
       <label>4. Organisation<input id="organisation" required></label>
-      <label>5. Mobile Mobile Number<input id="phoneNumber" type="tel" inputmode="numeric" placeholder="0971234567" required></label>
+      <label>5. Mobile Number<input id="phoneNumber" type="tel" inputmode="numeric" placeholder="0971234567" required></label>
       <label>6. NRC Number<input id="nrcNumber" placeholder="123456/12/1" required></label>
       <label>7. District<input id="district" required></label>
       <label>8. Mobile Registered Name<input id="mobileRegisteredName" required></label>
@@ -58,13 +58,14 @@ function move(e){if(!drawing)return; const p=point(e); ctx.lineTo(p.x,p.y); ctx.
 function end(){drawing=false;}
 canvas.addEventListener('pointerdown',start); canvas.addEventListener('pointermove',move); canvas.addEventListener('pointerup',end); canvas.addEventListener('pointerleave',end);
 document.getElementById('clearSignature').onclick=()=>{ctx.clearRect(0,0,canvas.clientWidth,canvas.clientHeight);};
-async function loadEvent(){try{const url=eventSlug?`/api/event/${encodeURIComponent(eventSlug)}`:'/api/event'; const r=await fetch(url); const e=await r.json(); if(!r.ok)throw new Error(e.error); eventSlug=e.slug; document.getElementById('eventInfo').innerHTML=`<strong>${e.name}</strong><br>Date: ${e.date}<br>Venue: ${e.venue}`; if(e.expired){closeRegistration('Registration for this event has expired. Registration links are valid for two hours after an event is created. Please contact the event administrator.');}}catch(err){document.getElementById('eventInfo').textContent=err.message;}}
+function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function loadEvent(){try{const url=eventSlug?`/api/event/${encodeURIComponent(eventSlug)}`:'/api/event'; const r=await fetch(url); const e=await r.json(); if(!r.ok)throw new Error(e.error); eventSlug=e.slug; document.getElementById('eventInfo').innerHTML=`<strong>${escapeHtml(e.name)}</strong><br>Date: ${escapeHtml(e.date)}<br>Venue: ${escapeHtml(e.venue)}`; if(e.expired){closeRegistration('Registration for this event has expired. Please contact the event administrator.');}}catch(err){document.getElementById('eventInfo').textContent=err.message;}}
 function closeRegistration(reason){Array.from(form.elements).forEach(el=>el.disabled=true);submitBtn.disabled=true;submitBtn.textContent='Registration Closed';message.className='message error';message.textContent=reason;}
 loadEvent();
 form.addEventListener('submit',async e=>{e.preventDefault(); message.textContent=''; const signature=canvas.toDataURL('image/png');
  if(signature.length<500) {message.className='message error'; message.textContent='Please provide your signature.'; return;}
  if(!livePhoto){message.className='message error';message.textContent='Please open the camera and capture your live photo before submitting.';return;}
- const data={fullName:fullName.value,gender:gender.value,designation:designation.value,organisation:organisation.value,phoneNumber:phoneNumber.value.trim(),nrcNumber:nrcNumber.value.trim(),district:district.value,mobileRegisteredName:mobileRegisteredName.value,signature,livePhoto,eventSlug};
+ const data={fullName:document.getElementById('fullName').value,gender:document.getElementById('gender').value,designation:document.getElementById('designation').value,organisation:document.getElementById('organisation').value,phoneNumber:document.getElementById('phoneNumber').value.trim(),nrcNumber:document.getElementById('nrcNumber').value.trim(),district:document.getElementById('district').value,mobileRegisteredName:document.getElementById('mobileRegisteredName').value,signature,livePhoto,eventSlug};
  if(!/^(09|07)[0-9]{8}$/.test(data.phoneNumber)){message.className='message error';message.textContent='Enter a valid Zambian mobile number.';return;}
  if(!/^[0-9]{6}\/[0-9]{2}\/[0-9]$/.test(data.nrcNumber)){message.className='message error';message.textContent='Use NRC format 123456/12/1.';return;}
  submitBtn.disabled=true; submitBtn.textContent='Getting location…';
