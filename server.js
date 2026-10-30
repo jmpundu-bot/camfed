@@ -361,7 +361,7 @@ app.post('/api/admin/users', requireAdmin, async (req,res) => {
   const username = String(req.body.username || '').trim();
   const password = String(req.body.password || '');
   const province = requestedProvince(req.body.province);
-  if (!/^[A-Za-z0-9._-]{3,50}$/.test(username)) return res.status(400).json({ error:'Username must be 3–50 characters using letters, numbers, dots, underscores, or hyphens.' });
+  if (username.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)) return res.status(400).json({ error:'Enter a valid email address to use as the username.' });
   if (username.toLowerCase() === ADMIN_USERNAME.toLowerCase()) return res.status(400).json({ error:'That username is reserved for the administrator.' });
   if (password.length < 10) return res.status(400).json({ error:'Password must be at least 10 characters.' });
   if (!province) return res.status(400).json({ error:'Select a valid province.' });
@@ -375,7 +375,7 @@ app.patch('/api/admin/users/:id', requireAdmin, async (req,res) => {
   const username = String(req.body.username || '').trim();
   const province = requestedProvince(req.body.province);
   const password = String(req.body.password || '');
-  if (!/^[A-Za-z0-9._-]{3,50}$/.test(username) || username.toLowerCase() === ADMIN_USERNAME.toLowerCase()) return res.status(400).json({error:'Enter a valid, non-reserved username.'});
+  if (username.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username) || username.toLowerCase() === ADMIN_USERNAME.toLowerCase()) return res.status(400).json({error:'Enter a valid email address to use as the username.'});
   if (!province) return res.status(400).json({error:'Select a valid province.'});
   if (password && password.length < 10) return res.status(400).json({error:'Password must be at least 10 characters.'});
   const duplicate = (await db.listProvincialUsers()).find(user => user.username.toLowerCase() === username.toLowerCase() && user.id !== Number(req.params.id));
