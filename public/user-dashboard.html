@@ -48,7 +48,7 @@
 
     async function openDashboard() {
       try {
-        currentUser = await api('/api/admin/me');
+        currentUser = await api('/api/user/me');
         if (currentUser.role !== 'user') return window.location.replace('/admin');
         selectedProvince = currentUser.province;
         $('userIdentity').textContent = `${currentUser.username} · ${selectedProvince} Province`;
@@ -86,15 +86,15 @@
         if (!Number.isInteger(hours) || hours < 1 || hours > 720) return alert('Enter a whole number from 1 to 720 hours.');
         if (!confirm(`Set this link to expire in ${hours} hour(s) from now?`)) return;
         try {
-          await api(provinceUrl(`/api/admin/events/${event.id}/expiry`), {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({registrationHours:hours})});
+          await api(provinceUrl(`/api/user/events/${event.id}/expiry`), {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({registrationHours:hours})});
           await loadEvents();
         } catch (error) { alert(error.message); }
       });
       card.querySelector('.view-attendees').addEventListener('click', () => showAttendees(event.id, card));
       card.querySelector('.download-qr').addEventListener('click', () => downloadQrPdf(event, link));
-      card.querySelector('.download-pdf').addEventListener('click', () => window.location.assign(provinceUrl(`/api/admin/events/${event.id}/pdf`)));
-      card.querySelector('.download-csv').addEventListener('click', () => window.location.assign(provinceUrl(`/api/admin/events/${event.id}/csv`)));
-      card.querySelector('.download-eprf').addEventListener('click', () => window.location.assign(provinceUrl(`/api/admin/events/${event.id}/eprf`)));
+      card.querySelector('.download-pdf').addEventListener('click', () => window.location.assign(provinceUrl(`/api/user/events/${event.id}/pdf`)));
+      card.querySelector('.download-csv').addEventListener('click', () => window.location.assign(provinceUrl(`/api/user/events/${event.id}/csv`)));
+      card.querySelector('.download-eprf').addEventListener('click', () => window.location.assign(provinceUrl(`/api/user/events/${event.id}/eprf`)));
       return card;
     }
 
@@ -125,7 +125,7 @@
     async function loadEvents() {
       if (!selectedProvince) return;
       try {
-        const events = await api(provinceUrl('/api/admin/events'));
+        const events = await api(provinceUrl('/api/user/events'));
         $('events').replaceChildren();
         if (!events.length) $('events').innerHTML = '<p>No events yet for this province.</p>';
         events.forEach(event => $('events').appendChild(eventCard(event)));
@@ -138,14 +138,14 @@
       if (!panel.hidden) { panel.hidden = true; panel.replaceChildren(); button.textContent = 'View Attendees'; return; }
       button.disabled = true;
       try {
-        const result = await api(provinceUrl(`/api/admin/events/${eventId}/attendees`));
+        const result = await api(provinceUrl(`/api/user/events/${eventId}/attendees`));
         if (!result.attendees.length) panel.innerHTML = '<p>No attendees.</p>';
         else {
           const rows = result.attendees.map((attendee, index) => `<tr><td>${index + 1}</td><td>${esc(attendee.full_name)}</td><td>${esc(attendee.gender)}</td><td>${esc(attendee.designation)}</td><td>${esc(attendee.organisation)}</td><td>${esc(attendee.phone_number)}</td><td>${esc(attendee.nrc_number)}</td><td>${esc(attendee.district)}</td><td>${attendee.latitude != null && attendee.longitude != null ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(`${attendee.latitude},${attendee.longitude}`)}" target="_blank" rel="noopener">View map</a>` : 'Not captured'}</td><td><button type="button" class="danger delete-attendee" data-id="${Number(attendee.id)}" data-name="${esc(attendee.full_name)}">Delete</button></td></tr>`).join('');
           panel.innerHTML = `<div class="table-wrap"><table><thead><tr><th>No.</th><th>Name</th><th>Gender</th><th>Designation</th><th>Organisation</th><th>Phone</th><th>NRC</th><th>District</th><th>GPS Location</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>`;
           panel.querySelectorAll('.delete-attendee').forEach(deleteButton => deleteButton.addEventListener('click', async () => {
             if (!confirm(`Delete the record for ${deleteButton.dataset.name}? This cannot be undone.`)) return;
-            try { await api(provinceUrl(`/api/admin/attendees/${deleteButton.dataset.id}`), {method:'DELETE'}); await loadEvents(); }
+            try { await api(provinceUrl(`/api/user/attendees/${deleteButton.dataset.id}`), {method:'DELETE'}); await loadEvents(); }
             catch (error) { alert(error.message); }
           }));
         }
@@ -160,7 +160,7 @@
       const button = $('eventForm').querySelector('button[type="submit"]');
       button.disabled = true;
       try {
-        const result = await api('/api/admin/events', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('eventName').value,date:$('eventDate').value,venue:$('eventVenue').value,province:selectedProvince,registrationHours:Number($('eventExpiryHours').value)})});
+        const result = await api('/api/user/events', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('eventName').value,date:$('eventDate').value,venue:$('eventVenue').value,province:selectedProvince,registrationHours:Number($('eventExpiryHours').value)})});
         $('eventForm').reset();
         $('eventExpiryHours').value = '2';
         alert(result.message || 'Event created.');
@@ -168,7 +168,7 @@
       } catch (error) { alert(error.message); }
       finally { button.disabled = false; }
     });
-    $('logout').addEventListener('click', async () => { await api('/api/admin/logout', {method:'POST'}); window.location.replace('/user'); });
+    $('logout').addEventListener('click', async () => { await api('/api/user/logout', {method:'POST'}); window.location.replace('/user'); });
     openDashboard();
   </script>
 </body>

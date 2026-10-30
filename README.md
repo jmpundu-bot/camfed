@@ -25,7 +25,7 @@ npm start
 
 Open http://localhost:3000/
 
-Choose **Admin Dashboard** for administrator access or **User Dashboard** for provincial accounts. The administrator can create, reassign, reset passwords for, and delete provincial accounts from the dashboard. A user's email address is their username. Each provincial account is assigned to exactly one of the seven provinces; its event and attendee access is enforced by the server on every request. Provincial users can manage events and attendance only in their assigned province. Provincial passwords are stored as salted scrypt hashes.
+Choose **Admin Dashboard** for administrator access or **User Dashboard** for provincial accounts. They use separate login pages, session cookies, and API routes. Admin access requires the administrator username and password; provincial access requires the account email, password, and assigned province. Logging into one dashboard does not replace or redirect the other dashboard's session. The administrator can create, reassign, reset passwords for, and delete provincial accounts from the dashboard. A user's email address is their username. Each provincial account is assigned to exactly one of the seven provinces; its event and attendee access is enforced by the server on every request. Provincial users can manage events and attendance only in their assigned province. Provincial passwords are stored as salted scrypt hashes.
 
 Provincial accounts are stored in the `camfed_provincial_users` table, which is created automatically at startup. No provincial user account is created by default; sign in with the administrator account to create one.
 

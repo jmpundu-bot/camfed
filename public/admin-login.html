@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Login | CAMFED Attendance System</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="purple-page">
+  <main class="container">
+    <section class="card">
+      <img src="/images/camfed-logo.png" class="logo" alt="CAMFED logo" onerror="this.style.display='none'">
+      <h1>Admin Dashboard Login</h1>
+      <form id="adminLoginForm">
+        <label>Admin Username<input id="username" autocomplete="username" required></label>
+        <label>Password<input id="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Login</button>
+        <p id="loginMessage" class="message" aria-live="polite"></p>
+      </form>
+      <div class="home-actions"><a class="button-link secondary-link" href="/">Back</a></div>
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById('adminLoginForm');
+    const message = document.getElementById('loginMessage');
+    const submit = form.querySelector('button[type="submit"]');
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      message.className = 'message';
+      message.textContent = '';
+      submit.disabled = true;
+      try {
+        const response = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value.trim(),
+            password: document.getElementById('password').value
+          })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || 'Admin login failed.');
+        window.location.assign('/admin/dashboard');
+      } catch (error) {
+        message.className = 'message error';
+        message.textContent = error.message;
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
