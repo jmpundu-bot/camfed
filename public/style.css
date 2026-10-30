@@ -4,6 +4,11 @@
 .button-link{display:inline-block;text-decoration:none;border-radius:7px;padding:12px 18px;font-weight:700;background:#222;color:#fff}
 .secondary-link{background:#64748b}
 
+.camfed-brand-lockup{display:flex;align-items:center;justify-content:center;gap:16px;margin:0 auto 20px}
+.camfed-brand-lockup .logo{flex:0 1 170px;width:170px;height:auto;max-height:70px;object-fit:contain;margin:0}
+.camfed-brand-lockup p{margin:0;color:#087742;font-size:clamp(16px,2.5vw,22px);font-weight:700;line-height:1.3;text-align:left}
+@media(max-width:420px){.camfed-brand-lockup{gap:10px}.camfed-brand-lockup .logo{flex-basis:125px;width:125px}.camfed-brand-lockup p{font-size:15px}}
+
 
 /* Keep the complete CAMFED Zambia background photo visible on every screen size. */
 body.purple-page{background-color:#622577;background-image:url('/images/camfed-background.jpg');background-size:contain;background-position:center;background-repeat:no-repeat;background-attachment:fixed;min-height:100vh;}
