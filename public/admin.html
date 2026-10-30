@@ -1,6 +1,6 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CAMFED Admin</title><link rel="stylesheet" href="/style.css"></head>
 <body class="purple-page admin-page"><div class="container admin-shell"><div class="card admin-card"><header class="dashboard-header"><img src="/images/camfed-logo.png" class="logo" alt="CAMFED logo"><div><h1>CAMFED Attendance System</h1><p>Administrator dashboard</p></div></header>
-<section id="dashboard" hidden><div class="admin-top"><h2 id="dashboardTitle">Provincial Attendance</h2><button id="logout" class="secondary">Logout</button></div><div class="province-layout"><nav id="provinceNav" class="province-nav" aria-label="Provinces"><h3>Provinces</h3><div id="provinceLinks"></div></nav><main class="province-main"><div class="tablet-brand"><img src="/images/camfed-logo.png" alt="CAMFED logo"><span>Learn, Thrive &amp; Lead for Change</span></div><h2 id="provinceTitle">Choose a province</h2><div id="provinceContent" hidden><form id="eventForm" class="event-form"><input id="eventName" placeholder="Event name" required><input id="eventDate" type="date" required><input id="eventVenue" placeholder="Venue" required><label class="expiry-hours-field">Registration link expires after (hours)<input id="eventExpiryHours" type="number" min="1" max="720" step="1" value="2" required></label><button type="submit">Create Event</button></form><p class="hint">Set a whole number from 1 to 720 hours (up to 30 days). You can change the expiry later for each event.</p><div id="events"></div></div></main></div><section id="userManagement" hidden><h2>Provincial User Accounts</h2><p>Create one account per provincial user. Use the user's email address as their username; each account is assigned to exactly one province.</p><form id="userForm" class="event-form"><input id="newUsername" type="email" placeholder="Email address (username)" required maxlength="254"><input id="newPassword" type="password" placeholder="Temporary password (10+ characters)" required minlength="10"><select id="newProvince" required><option value="">Assign province</option></select><button type="submit">Create User</button></form><div id="userList"></div></section></section>
+<section id="dashboard" hidden><div class="admin-top"><h2 id="dashboardTitle">Provincial Attendance</h2><button id="logout" class="secondary">Logout</button></div><div class="province-layout"><nav id="provinceNav" class="province-nav" aria-label="Provinces"><h3>Provinces</h3><div id="provinceLinks"></div></nav><main class="province-main"><div class="tablet-brand"><img src="/images/camfed-logo.png" alt="CAMFED logo"><span>Learn, Thrive and Lead for Change</span></div><h2 id="provinceTitle">Choose a province</h2><div id="provinceContent" hidden><form id="eventForm" class="event-form"><input id="eventName" placeholder="Event name" required><input id="eventDate" type="date" required><input id="eventVenue" placeholder="Venue" required><label class="expiry-hours-field">Registration link expires after (hours)<input id="eventExpiryHours" type="number" min="1" max="720" step="1" value="2" required></label><button type="submit">Create Event</button></form><p class="hint">Set a whole number from 1 to 720 hours (up to 30 days). You can change the expiry later for each event.</p><div id="events"></div></div></main></div><section id="userManagement" hidden><h2>Provincial User Accounts</h2><p>Create one account per provincial user. Use the user's email address as their username; each account is assigned to exactly one province.</p><form id="userForm" class="event-form"><input id="newUsername" type="email" placeholder="Email address (username)" required maxlength="254"><input id="newPassword" type="password" placeholder="Temporary password (10+ characters)" required minlength="10"><select id="newProvince" required><option value="">Assign province</option></select><button type="submit">Create User</button></form><div id="userList"></div></section></section>
 </div></div><script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script><script>
 const $=id=>document.getElementById(id); const provinces=['Lusaka','Western','Central','Muchinga','Luapula','Northern','Eastern']; let selectedProvince=null,currentUser=null; function provinceUrl(url){return url+(url.includes('?')?'&':'?')+'province='+encodeURIComponent(selectedProvince);} function renderProvinces(){ $('provinceLinks').innerHTML='';$('provinceContent').hidden=currentUser?.role==='admin'&&!selectedProvince;if(currentUser?.role==='user'){selectedProvince=currentUser.province;$('provinceNav').hidden=true;}else{$('provinceNav').hidden=false;provinces.forEach(p=>{const b=document.createElement('button');b.type='button';b.textContent=p;b.className='province-button'+(p===selectedProvince?' active':'');b.onclick=()=>{selectedProvince=p;$('provinceTitle').textContent=p+' Province';renderProvinces();loadEvents();};$('provinceLinks').appendChild(b);});}$('provinceTitle').textContent=selectedProvince?selectedProvince+' Province':'Choose a province';} async function api(url,opt={}){const r=await fetch(url,opt);const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||'Request failed');return d;}
 async function check(){try{currentUser=await api('/api/admin/me');if(currentUser.role!=='admin')return location.replace('/admin');$('dashboard').hidden=false;$('dashboardTitle').textContent='Admin Dashboard · Provincial Attendance';$('userManagement').hidden=false;renderProvinces();loadEvents();loadUsers();}catch{location.replace('/admin');}}
@@ -15,24 +15,26 @@ async function loadEvents(){if($('dashboard').hidden||!selectedProvince)return;c
 async function setExpiry(eventId){const field=$('expiry-hours-'+eventId);const hours=Number(field.value);if(!Number.isInteger(hours)||hours<1||hours>720){alert('Enter a whole number from 1 to 720 hours.');return;}if(!confirm(`Set this registration link to expire ${hours} hour(s) from now? This restarts the expiry countdown.`))return;try{const result=await api(provinceUrl('/api/admin/events/'+eventId+'/expiry'),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({registrationHours:hours})});alert(result.message);await loadEvents();}catch(e){alert(e.message);}}
 
 async function copyLink(slug){const link=location.origin+'/register/'+slug;try{await navigator.clipboard.writeText(link);alert('Registration link copied.');}catch{prompt('Copy this registration link:',link);}}
+function readImageData(blob){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('Unable to read an image for the QR PDF.'));reader.readAsDataURL(blob);});}
 async function downloadQrPdf(name,date,venue,slug){
   const link=location.origin+'/register/'+slug;
   const qrUrl='https://api.qrserver.com/v1/create-qr-code/?size=600x600&format=png&data='+encodeURIComponent(link);
   try {
-    const response=await fetch(qrUrl); if(!response.ok) throw Error('Could not generate QR code. Check your internet connection and try again.');
-    const blob=await response.blob(); const reader=new FileReader();
-    reader.onload=()=>{
-      if(!window.jspdf||!window.jspdf.jsPDF){alert('PDF generator is unavailable. Check your internet connection and try again.');return;}
-      const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:'mm',format:'a4'});
-      doc.setFontSize(20); doc.text('CAMFED Event Registration',105,22,{align:'center'});
-      doc.setFontSize(14); doc.text(String(name),105,35,{align:'center',maxWidth:175});
-      doc.setFontSize(11); doc.text('Date: '+String(date),105,48,{align:'center'}); doc.text('Venue: '+String(venue),105,56,{align:'center',maxWidth:175});
-      doc.addImage(reader.result,'PNG',55,68,100,100);
-      doc.setFontSize(11); doc.text('Scan this QR code to register for the event',105,178,{align:'center'});
-      doc.setFontSize(9); doc.text(link,105,188,{align:'center',maxWidth:180});
-      const safeName=String(name).replace(/[^a-z0-9_-]+/gi,'_').replace(/^_+|_+$/g,'')||'event';
-      doc.save('CAMFED_'+safeName+'_Registration_QR.pdf');
-    }; reader.readAsDataURL(blob);
+    const [response,logoResponse]=await Promise.all([fetch(qrUrl),fetch('/images/camfed-logo.png')]);
+    if(!response.ok)throw Error('Could not generate QR code. Check your internet connection and try again.');
+    if(!logoResponse.ok)throw Error('Could not load the CAMFED logo for the QR PDF.');
+    const [qrData,logoData]=await Promise.all([readImageData(await response.blob()),readImageData(await logoResponse.blob())]);
+    if(!window.jspdf||!window.jspdf.jsPDF)throw Error('PDF generator is unavailable. Check your internet connection and try again.');
+    const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:'mm',format:'a4'});
+    doc.addImage(logoData,'PNG',75,6,60,20);
+    doc.setFontSize(20); doc.text('CAMFED Event Registration',105,34,{align:'center'});
+    doc.setFontSize(14); doc.text(String(name),105,46,{align:'center',maxWidth:175});
+    doc.setFontSize(11); doc.text('Date: '+String(date),105,58,{align:'center'}); doc.text('Venue: '+String(venue),105,66,{align:'center',maxWidth:175});
+    doc.addImage(qrData,'PNG',55,76,100,100);
+    doc.setFontSize(11); doc.text('Scan this QR code to register for the event',105,185,{align:'center'});
+    doc.setFontSize(9); doc.text(link,105,195,{align:'center',maxWidth:180});
+    const safeName=String(name).replace(/[^a-z0-9_-]+/gi,'_').replace(/^_+|_+$/g,'')||'event';
+    doc.save('CAMFED_'+safeName+'_Registration_QR.pdf');
   } catch(e){alert(e.message||'Unable to download QR PDF. Please try again.');}
 }
 const attendeeViewTimers = new Map();
