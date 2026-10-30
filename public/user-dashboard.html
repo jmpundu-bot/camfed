@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>User Dashboard | CAMFED Attendance System</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="purple-page admin-page">
+  <main class="container admin-shell">
+    <section class="card admin-card">
+      <header class="dashboard-header">
+        <img src="/images/camfed-logo.png" class="logo" alt="CAMFED logo">
+        <div><h1>CAMFED Attendance System</h1><p id="userIdentity">Provincial User Dashboard</p></div>
+        <button id="logout" class="secondary" type="button">Logout</button>
+      </header>
+      <section id="userDashboard" hidden>
+        <h2 id="provinceTitle"></h2>
+        <form id="eventForm" class="event-form">
+          <input id="eventName" placeholder="Event name" required>
+          <input id="eventDate" type="date" required>
+          <input id="eventVenue" placeholder="Venue" required>
+          <label class="expiry-hours-field">Registration link expires after (hours)
+            <input id="eventExpiryHours" type="number" min="1" max="720" step="1" value="2" required>
+          </label>
+          <button type="submit">Create Event</button>
+        </form>
+        <p class="hint">Create and manage events for your assigned province. You can change an event link's expiry at any time.</p>
+        <div id="events" aria-live="polite"></div>
+      </section>
+      <p id="pageMessage" class="message" aria-live="polite"></p>
+    </section>
+  </main>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    let currentUser = null;
+    let selectedProvince = null;
+    const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const provinceUrl = url => `${url}${url.includes('?') ? '&' : '?'}province=${encodeURIComponent(selectedProvince)}`;
+
+    async function api(url, options = {}) {
+      const response = await fetch(url, options);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Request failed.');
+      return data;
+    }
+
+    async function openDashboard() {
+      try {
+        currentUser = await api('/api/admin/me');
+        if (currentUser.role !== 'user') return window.location.replace('/admin');
+        selectedProvince = currentUser.province;
+        $('userIdentity').textContent = `${currentUser.username} · ${selectedProvince} Province`;
+        $('provinceTitle').textContent = `${selectedProvince} Province Attendance`;
+        $('userDashboard').hidden = false;
+        await loadEvents();
+      } catch {
+        window.location.replace('/user');
+      }
+    }
+
+    function eventCard(event) {
+      const card = document.createElement('article');
+      card.className = 'event-card';
+      const expiry = Date.parse(event.registration_expires_at || new Date(Date.parse(event.created_at) + 2 * 60 * 60 * 1000));
+      const isExpired = Date.now() >= expiry;
+      const validity = Number(event.registration_hours) || 2;
+      const link = `${location.origin}/register/${encodeURIComponent(event.slug)}`;
+      card.innerHTML = `
+        <h3>${esc(event.name)}</h3>
+        <p>${esc(event.date)} · ${esc(event.venue)}</p>
+        <p><strong>${Number(event.attendee_count) || 0}</strong> attendees</p>
+        <p><strong>Registration link:</strong> <a href="/register/${encodeURIComponent(event.slug)}" target="_blank" rel="noopener"><code>${esc(link)}</code></a></p>
+        <p><strong>Expires:</strong> ${Number.isFinite(expiry) ? esc(new Date(expiry).toLocaleString()) : 'Unknown'} · <strong>Status:</strong> ${isExpired ? 'Expired' : 'Open'}</p>
+        <div class="expiry-editor"><label>Link validity (hours)<input class="expiry-hours" type="number" min="1" max="720" step="1" value="${validity}" required></label><button type="button" class="save-expiry">Save Expiry / Restart Countdown</button></div>
+        <div class="event-qr"><img loading="lazy" width="160" height="160" alt="Registration QR code for ${esc(event.name)}" src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(link)}"><p>Scan to register for this event</p></div>
+        <p class="event-actions"><button type="button" class="copy-link">Copy Link</button> <button type="button" class="view-attendees">View Attendees</button> <button type="button" class="download-qr">Download QR Code (PDF)</button> <button type="button" class="download-pdf">Download PDF</button> <button type="button" class="download-csv">Download CSV</button> <button type="button" class="download-eprf">Download EPRF</button></p>
+        <div class="attendee-list" hidden></div>`;
+      card.querySelector('.copy-link').addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(link); alert('Registration link copied.'); }
+        catch { prompt('Copy this registration link:', link); }
+      });
+      card.querySelector('.save-expiry').addEventListener('click', async () => {
+        const hours = Number(card.querySelector('.expiry-hours').value);
+        if (!Number.isInteger(hours) || hours < 1 || hours > 720) return alert('Enter a whole number from 1 to 720 hours.');
+        if (!confirm(`Set this link to expire in ${hours} hour(s) from now?`)) return;
+        try {
+          await api(provinceUrl(`/api/admin/events/${event.id}/expiry`), {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({registrationHours:hours})});
+          await loadEvents();
+        } catch (error) { alert(error.message); }
+      });
+      card.querySelector('.view-attendees').addEventListener('click', () => showAttendees(event.id, card));
+      card.querySelector('.download-qr').addEventListener('click', () => downloadQrPdf(event, link));
+      card.querySelector('.download-pdf').addEventListener('click', () => window.location.assign(provinceUrl(`/api/admin/events/${event.id}/pdf`)));
+      card.querySelector('.download-csv').addEventListener('click', () => window.location.assign(provinceUrl(`/api/admin/events/${event.id}/csv`)));
+      card.querySelector('.download-eprf').addEventListener('click', () => window.location.assign(provinceUrl(`/api/admin/events/${event.id}/eprf`)));
+      return card;
+    }
+
+    async function downloadQrPdf(event, link) {
+      try {
+        const response = await fetch(`https://api.qrserver.com/v1/create-qr-code/?size=600x600&format=png&data=${encodeURIComponent(link)}`);
+        if (!response.ok) throw new Error('Could not generate the QR code. Check your internet connection and try again.');
+        const blob = await response.blob();
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (!window.jspdf?.jsPDF) return alert('PDF generator is unavailable. Check your internet connection and try again.');
+          const {jsPDF} = window.jspdf;
+          const doc = new jsPDF({unit:'mm',format:'a4'});
+          doc.setFontSize(20); doc.text('CAMFED Event Registration',105,22,{align:'center'});
+          doc.setFontSize(14); doc.text(String(event.name),105,35,{align:'center',maxWidth:175});
+          doc.setFontSize(11); doc.text(`Date: ${event.date}`,105,48,{align:'center'}); doc.text(`Venue: ${event.venue}`,105,56,{align:'center',maxWidth:175});
+          doc.addImage(reader.result,'PNG',55,68,100,100);
+          doc.setFontSize(11); doc.text('Scan this QR code to register for the event',105,178,{align:'center'});
+          doc.setFontSize(9); doc.text(link,105,188,{align:'center',maxWidth:180});
+          const safeName=String(event.name).replace(/[^a-z0-9_-]+/gi,'_').replace(/^_+|_+$/g,'')||'event';
+          doc.save(`CAMFED_${safeName}_Registration_QR.pdf`);
+        };
+        reader.onerror = () => alert('Unable to read the QR code image. Please try again.');
+        reader.readAsDataURL(blob);
+      } catch (error) { alert(error.message || 'Unable to download QR PDF. Please try again.'); }
+    }
+
+    async function loadEvents() {
+      if (!selectedProvince) return;
+      try {
+        const events = await api(provinceUrl('/api/admin/events'));
+        $('events').replaceChildren();
+        if (!events.length) $('events').innerHTML = '<p>No events yet for this province.</p>';
+        events.forEach(event => $('events').appendChild(eventCard(event)));
+      } catch (error) { $('pageMessage').className = 'message error'; $('pageMessage').textContent = error.message; }
+    }
+
+    async function showAttendees(eventId, card) {
+      const panel = card.querySelector('.attendee-list');
+      const button = card.querySelector('.view-attendees');
+      if (!panel.hidden) { panel.hidden = true; panel.replaceChildren(); button.textContent = 'View Attendees'; return; }
+      button.disabled = true;
+      try {
+        const result = await api(provinceUrl(`/api/admin/events/${eventId}/attendees`));
+        if (!result.attendees.length) panel.innerHTML = '<p>No attendees.</p>';
+        else {
+          const rows = result.attendees.map((attendee, index) => `<tr><td>${index + 1}</td><td>${esc(attendee.full_name)}</td><td>${esc(attendee.gender)}</td><td>${esc(attendee.designation)}</td><td>${esc(attendee.organisation)}</td><td>${esc(attendee.phone_number)}</td><td>${esc(attendee.nrc_number)}</td><td>${esc(attendee.district)}</td><td>${attendee.latitude != null && attendee.longitude != null ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(`${attendee.latitude},${attendee.longitude}`)}" target="_blank" rel="noopener">View map</a>` : 'Not captured'}</td><td><button type="button" class="danger delete-attendee" data-id="${Number(attendee.id)}" data-name="${esc(attendee.full_name)}">Delete</button></td></tr>`).join('');
+          panel.innerHTML = `<div class="table-wrap"><table><thead><tr><th>No.</th><th>Name</th><th>Gender</th><th>Designation</th><th>Organisation</th><th>Phone</th><th>NRC</th><th>District</th><th>GPS Location</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+          panel.querySelectorAll('.delete-attendee').forEach(deleteButton => deleteButton.addEventListener('click', async () => {
+            if (!confirm(`Delete the record for ${deleteButton.dataset.name}? This cannot be undone.`)) return;
+            try { await api(provinceUrl(`/api/admin/attendees/${deleteButton.dataset.id}`), {method:'DELETE'}); await loadEvents(); }
+            catch (error) { alert(error.message); }
+          }));
+        }
+        panel.hidden = false;
+        button.textContent = 'Close Attendees';
+      } catch (error) { alert(error.message); }
+      finally { button.disabled = false; }
+    }
+
+    $('eventForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = $('eventForm').querySelector('button[type="submit"]');
+      button.disabled = true;
+      try {
+        const result = await api('/api/admin/events', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('eventName').value,date:$('eventDate').value,venue:$('eventVenue').value,province:selectedProvince,registrationHours:Number($('eventExpiryHours').value)})});
+        $('eventForm').reset();
+        $('eventExpiryHours').value = '2';
+        alert(result.message || 'Event created.');
+        await loadEvents();
+      } catch (error) { alert(error.message); }
+      finally { button.disabled = false; }
+    });
+    $('logout').addEventListener('click', async () => { await api('/api/admin/logout', {method:'POST'}); window.location.replace('/user'); });
+    openDashboard();
+  </script>
+</body>
+</html>

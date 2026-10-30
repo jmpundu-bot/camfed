@@ -254,17 +254,12 @@ app.get('/admin', (req, res) => {
   if (identity?.role === 'user') return res.redirect('/user/dashboard');
   res.sendFile(path.join(PUBLIC_DIR, 'admin.html'));
 });
-app.get('/user', async (req, res) => {
-  const identity = verifySession(getCookie(req, 'camfed_session'));
-  if (identity?.role === 'admin') return res.redirect('/admin');
-  if (identity?.role === 'user' && await db.getProvincialUser(identity.username)) return res.redirect('/user/dashboard');
-  res.sendFile(path.join(PUBLIC_DIR, 'user-login.html'));
-});
+app.get('/user', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'user-login.html')));
 app.get('/user/dashboard', async (req, res) => {
   const identity = verifySession(getCookie(req, 'camfed_session'));
   if (identity?.role !== 'user') return res.redirect(identity?.role === 'admin' ? '/admin' : '/user');
   if (!await db.getProvincialUser(identity.username)) return res.redirect('/user');
-  res.sendFile(path.join(PUBLIC_DIR, 'admin.html'));
+  res.sendFile(path.join(PUBLIC_DIR, 'user-dashboard.html'));
 });
 app.get('/registration-success', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'success.html')));
 app.get('/registration-details', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'attendee-details.html')));
