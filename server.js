@@ -249,8 +249,23 @@ app.get('/api/test', async (req, res) => {
 });
 
 app.get('/', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
-app.get('/admin', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'admin.html')));
-app.get('/user', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'admin.html')));
+app.get('/admin', (req, res) => {
+  const identity = verifySession(getCookie(req, 'camfed_session'));
+  if (identity?.role === 'user') return res.redirect('/user/dashboard');
+  res.sendFile(path.join(PUBLIC_DIR, 'admin.html'));
+});
+app.get('/user', async (req, res) => {
+  const identity = verifySession(getCookie(req, 'camfed_session'));
+  if (identity?.role === 'admin') return res.redirect('/admin');
+  if (identity?.role === 'user' && await db.getProvincialUser(identity.username)) return res.redirect('/user/dashboard');
+  res.sendFile(path.join(PUBLIC_DIR, 'user-login.html'));
+});
+app.get('/user/dashboard', async (req, res) => {
+  const identity = verifySession(getCookie(req, 'camfed_session'));
+  if (identity?.role !== 'user') return res.redirect(identity?.role === 'admin' ? '/admin' : '/user');
+  if (!await db.getProvincialUser(identity.username)) return res.redirect('/user');
+  res.sendFile(path.join(PUBLIC_DIR, 'admin.html'));
+});
 app.get('/registration-success', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'success.html')));
 app.get('/registration-details', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'attendee-details.html')));
 app.get('/api/registration-details/:token', async (req, res) => {
@@ -347,7 +362,12 @@ app.post('/api/admin/login', async (req, res) => {
     const user = await db.getProvincialUser(username);
     if (user) {
       const hash = await new Promise((resolve, reject) => crypto.scrypt(password, user.password_salt, 64, (err, key) => err ? reject(err) : resolve(key.toString('hex'))));
-      if (crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(user.password_hash, 'hex'))) identity = { username: user.username, role: 'user', province: user.province };
+      if (crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(user.password_hash, 'hex'))) {
+        const selectedProvince = requestedProvince(req.body.province);
+        if (!selectedProvince) return res.status(400).json({ error:'Select your assigned province to continue.' });
+        if (selectedProvince !== user.province) return res.status(403).json({ error:'The selected province does not match this account.' });
+        identity = { username: user.username, role: 'user', province: user.province };
+      }
     }
   }
   if (!identity) return res.status(401).json({ error: 'Invalid username or password.' });
@@ -416,7 +436,7 @@ app.patch('/api/admin/events/:id/expiry', requireStaff, async (req,res) => {
   if (!event) return res.status(404).json({error:'Event not found.'});
   res.json({id:event.id, registrationHours:hours, expiresAt:event.registration_expires_at, expired:false, message:`Registration link updated. It will expire in ${hours} hour(s) from now.`});
 });
-app.delete('/api/admin/events/:id', requireStaff, async (req,res) => {
+app.delete('/api/admin/events/:id', requireAdmin, async (req,res) => {
   const eventId = Number(req.params.id);
   const province = provinceForRequest(req);
   const event = province && await db.getEventById(eventId, province);

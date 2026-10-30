@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>User Dashboard Login | CAMFED Attendance System</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="purple-page">
+  <main class="container">
+    <section class="card">
+      <img src="/images/camfed-logo.png" class="logo" alt="CAMFED logo" onerror="this.style.display='none'">
+      <h1>User Dashboard Login</h1>
+      <p>Sign in with your provincial account and select its assigned province.</p>
+      <form id="userLoginForm">
+        <label>Username (email)<input id="username" type="email" autocomplete="username" required></label>
+        <label>Password<input id="password" type="password" autocomplete="current-password" required></label>
+        <label>Select Assigned Province
+          <select id="province" required>
+            <option value="">Choose your province</option>
+            <option>Lusaka</option><option>Western</option><option>Central</option><option>Muchinga</option>
+            <option>Luapula</option><option>Northern</option><option>Eastern</option>
+          </select>
+        </label>
+        <button type="submit">Open</button>
+        <p id="loginMessage" class="message" aria-live="polite"></p>
+      </form>
+      <div class="home-actions"><a class="button-link secondary-link" href="/">Back</a></div>
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById('userLoginForm');
+    const message = document.getElementById('loginMessage');
+    const submit = form.querySelector('button[type="submit"]');
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      message.className = 'message';
+      message.textContent = '';
+      submit.disabled = true;
+      try {
+        const response = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value.trim(),
+            password: document.getElementById('password').value,
+            province: document.getElementById('province').value
+          })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || 'Login failed.');
+        window.location.assign(result.role === 'admin' ? '/admin' : '/user/dashboard');
+      } catch (error) {
+        message.className = 'message error';
+        message.textContent = error.message;
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
