@@ -611,7 +611,9 @@ app.patch('/api/user/events/:id/expiry', requireUser, (req,res) => res.status(40
 app.get('/api/user/events/:id/attendees', requireUser, async (req,res) => {
   const event = await db.getEventById(req.params.id,req.auth.province);
   if (!event) return res.status(404).json({error:'Event not found in your province.'});
-  res.json({event,attendees:await attendeesForEvent(event.id)});
+  const attendees = await attendeesForEvent(event.id);
+  const provinceVisibleAttendees = attendees.map(({latitude,longitude,gps_accuracy_m,gps_captured_at,...attendee}) => attendee);
+  res.json({event,attendees:provinceVisibleAttendees});
 });
 app.get('/api/user/events/:id/csv', requireUser, async (req,res) => {
   const event = await db.getEventById(req.params.id,req.auth.province);
