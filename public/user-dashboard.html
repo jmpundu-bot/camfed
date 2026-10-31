@@ -96,12 +96,13 @@
         const {jsPDF} = window.jspdf;
         const doc = new jsPDF({unit:'mm',format:'a4'});
         doc.addImage(logoData,'PNG',75,6,60,20);
-        doc.setFontSize(20); doc.text('CAMFED Event Registration',105,34,{align:'center'});
-        doc.setFontSize(14); doc.text(String(event.name),105,46,{align:'center',maxWidth:175});
-        doc.setFontSize(11); doc.text(`Date: ${event.date}`,105,58,{align:'center'}); doc.text(`Venue: ${event.venue}`,105,66,{align:'center',maxWidth:175});
-        doc.addImage(qrData,'PNG',55,76,100,100);
-        doc.setFontSize(11); doc.text('Scan this QR code to register for the event',105,185,{align:'center'});
-        doc.setFontSize(9); doc.text(link,105,195,{align:'center',maxWidth:180});
+        doc.setFontSize(8); doc.text('Learn, Thrive & Lead for Change',105,30,{align:'center'});
+        doc.setFontSize(20); doc.text('CAMFED Event Registration',105,39,{align:'center'});
+        doc.setFontSize(14); doc.text(String(event.name),105,51,{align:'center',maxWidth:175});
+        doc.setFontSize(11); doc.text(`Date: ${event.date}`,105,63,{align:'center'}); doc.text(`Venue: ${event.venue}`,105,71,{align:'center',maxWidth:175});
+        doc.addImage(qrData,'PNG',55,81,100,100);
+        doc.setFontSize(11); doc.text('Scan this QR code to register for the event',105,190,{align:'center'});
+        doc.setFontSize(9); doc.text(link,105,200,{align:'center',maxWidth:180});
         const safeName=String(event.name).replace(/[^a-z0-9_-]+/gi,'_').replace(/^_+|_+$/g,'')||'event';
         doc.save(`CAMFED_${safeName}_Registration_QR.pdf`);
       } catch (error) { alert(error.message || 'Unable to download QR PDF. Please try again.'); }

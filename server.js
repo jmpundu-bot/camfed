@@ -606,12 +606,11 @@ async function makePdf(event,attendees,filePath){
       // Preserve the original register logo and place the supplementary mark
       // in the unused far-right strip of the header.
       doc.image(logoPath,28,22,{fit:[115,45]});
-      doc.image(logoPath,768,20,{fit:[42,24]});
     }
     doc.font('Helvetica-Bold').fontSize(16).text('CAMFED ATTENDANCE REGISTER',155,28,{width:600,align:'center'});
     doc.font('Helvetica').fontSize(9).text(event.name,155,49,{width:600,align:'center'});
     doc.fontSize(8).text(`Province: ${event.province || 'Lusaka'}    Date: ${event.date}    Venue: ${event.venue}    Total: ${attendees.length}`,155,64,{width:600,align:'center'});
-    doc.font('Helvetica-Bold').fontSize(5).fillColor('#087742').text('Learn, Thrive & Lead for Change',760,47,{width:54,align:'center'}).fillColor('#000000');
+    doc.font('Helvetica-Bold').fontSize(6).fillColor('#087742').text('Learn, Thrive & Lead for Change',760,47,{width:54,align:'center'}).fillColor('#000000');
     let x=tableX;
     headers.forEach((h,i)=>{
       doc.rect(x,82,cols[i],headerH).stroke();
