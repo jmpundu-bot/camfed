@@ -419,6 +419,32 @@ app.post('/api/admin/accounts/admins', requireAdmin, requirePrimaryAdmin, async 
   try { res.status(201).json(await db.createAdminUser({username,password_salt:salt,password_hash:passwordHash,created_at:new Date().toISOString()})); }
   catch (err) { if (err.code === '23505') return res.status(409).json({error:'That admin email is already in use.'}); throw err; }
 });
+app.patch('/api/admin/accounts/admins/:id', requireAdmin, requirePrimaryAdmin, async (req,res) => {
+  const id = Number(req.params.id);
+  const username = String(req.body.username || '').trim();
+  const password = String(req.body.password || '');
+  if (!Number.isInteger(id) || id < 1) return res.status(400).json({error:'Invalid admin account.'});
+  if (username.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)) return res.status(400).json({error:'Enter a valid email address to use as the admin username.'});
+  if (username.toLowerCase() === ADMIN_USERNAME.toLowerCase()) return res.status(409).json({error:'That email is reserved for the original administrator.'});
+  if (password && password.length < 10) return res.status(400).json({error:'Password must be at least 10 characters.'});
+  if (await db.getProvincialUser(username)) return res.status(409).json({error:'That email is already assigned to a provincial account.'});
+  const existing = (await db.listAdminUsers()).find(a => a.id === id);
+  if (!existing) return res.status(404).json({error:'Additional admin account not found.'});
+  if ((await db.listAdminUsers()).some(a => a.id !== id && a.username.toLowerCase() === username.toLowerCase())) return res.status(409).json({error:'That admin email is already in use.'});
+  let credentials = {};
+  if (password) {
+    const password_salt = crypto.randomBytes(16).toString('hex');
+    credentials = {password_salt, password_hash:await new Promise((resolve,reject)=>crypto.scrypt(password,password_salt,64,(err,key)=>err?reject(err):resolve(key.toString('hex'))))};
+  }
+  try { res.json(await db.updateAdminUser(id, {username, ...credentials})); }
+  catch (err) { if (err.code === '23505') return res.status(409).json({error:'That admin email is already in use.'}); throw err; }
+});
+app.delete('/api/admin/accounts/admins/:id', requireAdmin, requirePrimaryAdmin, async (req,res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) return res.status(400).json({error:'Invalid admin account.'});
+  if (!await db.deleteAdminUser(id)) return res.status(404).json({error:'Additional admin account not found.'});
+  res.json({message:'Admin account deleted.'});
+});
 app.get('/api/admin/users', requireAdmin, async (req,res) => res.json(await db.listProvincialUsers()));
 app.post('/api/admin/users', requireAdmin, requirePrimaryAdmin, async (req,res) => {
   const username = String(req.body.username || '').trim();
@@ -530,7 +556,7 @@ app.get('/api/admin/events/:id/eprf', requireAdmin, async (req, res) => {
   try {
     const templatePath = path.join(ROOT, 'templates', 'EPRF.xlsx');
     if (!fs.existsSync(templatePath)) throw new Error('The EPRF template file is missing from the templates folder.');
-    const workbook = createEprfWorkbook(attendees, templatePath);
+    const workbook = createEprfWorkbook(attendees, templatePath, event);
     const safeEventName = String(event.name || 'Event').replace(/[\\/:*?"<>|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
     const filename = `EPRF – ${safeEventName || 'Event'}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -576,10 +602,14 @@ async function makePdf(event,attendees,filePath){
   }
   function pageHeader(){
     pageWatermark();
-    if(fs.existsSync(logoPath)) doc.image(logoPath,28,22,{fit:[115,45]});
-    doc.font('Helvetica-Bold').fontSize(16).text('CAMFED ATTENDANCE REGISTER',155,28,{width:600,align:'center'});
-    doc.font('Helvetica').fontSize(9).text(event.name,155,49,{width:600,align:'center'});
-    doc.fontSize(8).text(`Province: ${event.province || 'Lusaka'}    Date: ${event.date}    Venue: ${event.venue}    Total: ${attendees.length}`,155,64,{width:600,align:'center'});
+    if(fs.existsSync(logoPath)) {
+      doc.image(logoPath,366,4,{fit:[110,35],align:'center'});
+      doc.image(logoPath,28,43,{fit:[105,38]});
+    }
+    doc.font('Helvetica-Bold').fontSize(10).fillColor('#087742').text('Learn, Thrive & Lead for Change',145,52,{width:260,align:'left'}).fillColor('#000000');
+    doc.font('Helvetica-Bold').fontSize(14).text('CAMFED ATTENDANCE REGISTER',405,25,{width:405,align:'center'});
+    doc.font('Helvetica').fontSize(8).text(event.name,405,43,{width:405,align:'center'});
+    doc.fontSize(7).text(`Province: ${event.province || 'Lusaka'}    Date: ${event.date}    Venue: ${event.venue}    Total: ${attendees.length}`,405,58,{width:405,align:'center'});
     let x=tableX;
     headers.forEach((h,i)=>{
       doc.rect(x,82,cols[i],headerH).stroke();
@@ -632,7 +662,9 @@ async function makePdf(event,attendees,filePath){
   const range=doc.bufferedPageRange();
   for(let i=range.start;i<range.start+range.count;i++){
     doc.switchToPage(i);
-    doc.font('Helvetica').fontSize(7).text(`CAMFED Attendance Register  |  Page ${i+1} of ${range.count}`,28,570,{width:785,align:'center'});
+    // Keep the footer above PDFKit's bottom-margin boundary (567pt). Writing
+    // at 570pt caused PDFKit to append an otherwise empty page at doc.end().
+    doc.font('Helvetica').fontSize(7).text(`CAMFED Attendance Register  |  Page ${i+1} of ${range.count}`,28,550,{width:785,align:'center'});
   }
   doc.end();
   return new Promise((resolve,reject)=>{stream.on('finish',()=>resolve(filePath));stream.on('error',reject);});
@@ -675,7 +707,7 @@ app.get('/api/user/events/:id/eprf', requireUser, async (req,res) => {
   try {
     const templatePath = path.join(ROOT,'templates','EPRF.xlsx');
     if (!fs.existsSync(templatePath)) throw new Error('The EPRF template file is missing.');
-    const workbook = createEprfWorkbook(attendees,templatePath);
+    const workbook = createEprfWorkbook(attendees,templatePath,event);
     const safeName = String(event.name || 'Event').replace(/[\\/:*?"<>|\r\n]+/g,' ').replace(/\s+/g,' ').trim();
     const filename = `EPRF – ${safeName || 'Event'}.xlsx`;
     res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
