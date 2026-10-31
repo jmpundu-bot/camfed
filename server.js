@@ -603,13 +603,15 @@ async function makePdf(event,attendees,filePath){
   function pageHeader(){
     pageWatermark();
     if(fs.existsSync(logoPath)) {
-      doc.image(logoPath,366,4,{fit:[110,35],align:'center'});
-      doc.image(logoPath,28,43,{fit:[105,38]});
+      // Preserve the original register logo and place the supplementary mark
+      // in the unused far-right strip of the header.
+      doc.image(logoPath,28,22,{fit:[115,45]});
+      doc.image(logoPath,768,20,{fit:[42,24]});
     }
-    doc.font('Helvetica-Bold').fontSize(10).fillColor('#087742').text('Learn, Thrive & Lead for Change',145,52,{width:260,align:'left'}).fillColor('#000000');
-    doc.font('Helvetica-Bold').fontSize(14).text('CAMFED ATTENDANCE REGISTER',405,25,{width:405,align:'center'});
-    doc.font('Helvetica').fontSize(8).text(event.name,405,43,{width:405,align:'center'});
-    doc.fontSize(7).text(`Province: ${event.province || 'Lusaka'}    Date: ${event.date}    Venue: ${event.venue}    Total: ${attendees.length}`,405,58,{width:405,align:'center'});
+    doc.font('Helvetica-Bold').fontSize(16).text('CAMFED ATTENDANCE REGISTER',155,28,{width:600,align:'center'});
+    doc.font('Helvetica').fontSize(9).text(event.name,155,49,{width:600,align:'center'});
+    doc.fontSize(8).text(`Province: ${event.province || 'Lusaka'}    Date: ${event.date}    Venue: ${event.venue}    Total: ${attendees.length}`,155,64,{width:600,align:'center'});
+    doc.font('Helvetica-Bold').fontSize(5).fillColor('#087742').text('Learn, Thrive & Lead for Change',760,47,{width:54,align:'center'}).fillColor('#000000');
     let x=tableX;
     headers.forEach((h,i)=>{
       doc.rect(x,82,cols[i],headerH).stroke();
