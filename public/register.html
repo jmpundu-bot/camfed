@@ -14,13 +14,14 @@
     <div id="eventInfo" class="event-box">Loading event information...</div>
     <form id="attendanceForm">
       <label>1. Full Name<input id="fullName" required></label>
-      <label>2. Gender<select id="gender" required><option value="">Select</option><option>Male</option><option>Female</option></select></label>
-      <label>3. Designation<input id="designation" required></label>
-      <label>4. Organisation<input id="organisation" required></label>
-      <label>5. Mobile Money Number<input id="phoneNumber" type="tel" inputmode="numeric" placeholder="0971234567" required></label>
-      <label>6. NRC Number<input id="nrcNumber" placeholder="123456/12/1" required></label>
-      <label>7. District<input id="district" required></label>
-      <label>8. Mobile Registered Name<input id="mobileRegisteredName" required></label>
+      <label>2. Email Address<input id="emailAddress" type="email" autocomplete="email" required></label>
+      <label>3. Gender<select id="gender" required><option value="">Select</option><option>Male</option><option>Female</option></select></label>
+      <label>4. Designation<input id="designation" required></label>
+      <label>5. Organisation<input id="organisation" required></label>
+      <label>6. Mobile Money Number<input id="phoneNumber" type="tel" inputmode="numeric" placeholder="0971234567" required></label>
+      <label>7. NRC Number<input id="nrcNumber" placeholder="123456/12/1" required></label>
+      <label>8. District<input id="district" required></label>
+      <label>9. Mobile Registered Name<input id="mobileRegisteredName" required></label>
       <div class="photo-section">
         <label>9. Live Photo</label>
         <p>A live photo is required for this registration.</p>
@@ -35,7 +36,7 @@
         <p id="photoStatus" aria-live="polite">A live photo is required before registration.</p>
       </div>
       <div class="event-box"><strong></strong><p></p><p id="gpsStatus" aria-live="polite"></p></div>
-      <div class="signature-section"><label>10. Signature</label><canvas id="signaturePad" width="900" height="300"></canvas><button type="button" id="clearSignature" class="secondary">Clear Signature</button></div>
+      <div class="signature-section"><label>11. Signature</label><canvas id="signaturePad" width="900" height="300"></canvas><button type="button" id="clearSignature" class="secondary">Clear Signature</button></div>
       <button id="submitBtn" type="submit">Submit Registration</button>
       <p id="message" class="message"></p>
     </form>
@@ -66,7 +67,7 @@ loadEvent();
 form.addEventListener('submit',async e=>{e.preventDefault(); message.textContent=''; const signature=canvas.toDataURL('image/png');
  if(signature.length<500) {message.className='message error'; message.textContent='Please provide your signature.'; return;}
  if(!livePhoto){message.className='message error';message.textContent='Please open the camera and capture your live photo before submitting.';return;}
- const data={fullName:document.getElementById('fullName').value,gender:document.getElementById('gender').value,designation:document.getElementById('designation').value,organisation:document.getElementById('organisation').value,phoneNumber:document.getElementById('phoneNumber').value.trim(),nrcNumber:document.getElementById('nrcNumber').value.trim(),district:document.getElementById('district').value,mobileRegisteredName:document.getElementById('mobileRegisteredName').value,signature,livePhoto,eventSlug};
+ const data={fullName:document.getElementById('fullName').value,emailAddress:document.getElementById('emailAddress').value.trim(),gender:document.getElementById('gender').value,designation:document.getElementById('designation').value,organisation:document.getElementById('organisation').value,phoneNumber:document.getElementById('phoneNumber').value.trim(),nrcNumber:document.getElementById('nrcNumber').value.trim(),district:document.getElementById('district').value,mobileRegisteredName:document.getElementById('mobileRegisteredName').value,signature,livePhoto,eventSlug};
  if(!/^(09|07)[0-9]{8}$/.test(data.phoneNumber)){message.className='message error';message.textContent='Enter a valid Zambian mobile number.';return;}
  if(!/^[0-9]{6}\/[0-9]{2}\/[0-9]$/.test(data.nrcNumber)){message.className='message error';message.textContent='Use NRC format 123456/12/1.';return;}
  submitBtn.disabled=true; submitBtn.textContent='Getting location…';

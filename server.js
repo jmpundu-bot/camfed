@@ -286,7 +286,7 @@ app.get('/api/registration-details/:token', async (req, res) => {
   const attendee = await db.getAttendeeByToken(token);
   if (!attendee) return res.status(404).json({ error: 'Registration details could not be found.' });
   const event = await db.getEventById(attendee.event_id);
-  res.json({ fullName: attendee.full_name, gender: attendee.gender, designation: attendee.designation, organisation: attendee.organisation, phoneNumber: attendee.phone_number, nrcNumber: attendee.nrc_number, district: attendee.district, mobileRegisteredName: attendee.mobile_registered_name, registeredAt: attendee.created_at, eventName: event ? event.name : 'CAMFED event', eventDate: event ? event.date : '', venue: event ? event.venue : '' });
+  res.json({ fullName: attendee.full_name, emailAddress: attendee.email_address, gender: attendee.gender, designation: attendee.designation, organisation: attendee.organisation, phoneNumber: attendee.phone_number, nrcNumber: attendee.nrc_number, district: attendee.district, mobileRegisteredName: attendee.mobile_registered_name, registeredAt: attendee.created_at, eventName: event ? event.name : 'CAMFED event', eventDate: event ? event.date : '', venue: event ? event.venue : '' });
 });
 app.get('/admin.html', (req, res) => res.redirect('/admin/dashboard'));
 app.get('/admin-login.html', (req,res) => res.redirect('/admin'));
@@ -315,12 +315,14 @@ app.get('/api/event', async (req, res) => {
 
 app.post('/api/attendees', async (req, res) => {
   const b = req.body;
-  const required = ['fullName','gender','designation','organisation','phoneNumber','nrcNumber','district','mobileRegisteredName','signature','livePhoto'];
+  const required = ['fullName','emailAddress','gender','designation','organisation','phoneNumber','nrcNumber','district','mobileRegisteredName','signature','livePhoto'];
   if (required.some(k => !String(b[k] || '').trim())) return res.status(400).json({ error: 'Please complete all required fields.' });
   const event = b.eventSlug ? await findEventBySlug(b.eventSlug) : await db.getLatestEvent();
   if (!event) return res.status(400).json({ error: 'No event is available for registration.' });
   if (isRegistrationExpired(event)) return res.status(410).json({ error: 'Registration for this event has expired. Please contact the event administrator.' });
   const phone = String(b.phoneNumber).trim();
+  const email = String(b.emailAddress).trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
   const nrc = String(b.nrcNumber).trim();
   if (!/^(09|07)[0-9]{8}$/.test(phone)) return res.status(400).json({ error: 'Enter a valid Zambian mobile number, e.g. 0971234567.' });
   if (!/^[0-9]{6}\/[0-9]{2}\/[0-9]$/.test(nrc)) return res.status(400).json({ error: 'Enter NRC in the format 123456/12/1.' });
@@ -356,7 +358,7 @@ app.post('/api/attendees', async (req, res) => {
   }
   let attendee;
   try {
-    attendee = await db.createAttendee({ full_name:String(b.fullName).trim(), gender:String(b.gender).trim(), designation:String(b.designation).trim(), organisation:String(b.organisation).trim(), phone_number:phone, nrc_number:nrc, district:String(b.district).trim(), mobile_registered_name:String(b.mobileRegisteredName).trim(), signature_file:signatureFile, photo_file:photoFile, event_id:event.id, latitude, longitude, gps_accuracy_m:Number.isFinite(accuracy) && accuracy >= 0 ? accuracy : null, gps_captured_at:b.locationCapturedAt ? String(b.locationCapturedAt).slice(0, 40) : null, confirmation_token:confirmationToken, created_at:new Date().toISOString() });
+    attendee = await db.createAttendee({ full_name:String(b.fullName).trim(), email_address:email, gender:String(b.gender).trim(), designation:String(b.designation).trim(), organisation:String(b.organisation).trim(), phone_number:phone, nrc_number:nrc, district:String(b.district).trim(), mobile_registered_name:String(b.mobileRegisteredName).trim(), signature_file:signatureFile, photo_file:photoFile, event_id:event.id, latitude, longitude, gps_accuracy_m:Number.isFinite(accuracy) && accuracy >= 0 ? accuracy : null, gps_captured_at:b.locationCapturedAt ? String(b.locationCapturedAt).slice(0, 40) : null, confirmation_token:confirmationToken, created_at:new Date().toISOString() });
   } catch (e) {
     console.error('Could not save attendee registration:', e);
     for (const filename of [signatureFile, photoFile]) {
@@ -588,9 +590,9 @@ async function makePdf(event,attendees,filePath){
   const logoPath=path.join(PUBLIC_DIR,'images','camfed-logo.png');
 
   // A4 landscape printable width = 842 - 56 = 786 points.
-  // All 11 columns total exactly 786 points, including the live photo.
-  const cols=[22,82,38,62,80,55,58,54,70,110,155];
-  const headers=['No.','Full Name','Gender','Designation','Organisation','Phone','NRC Number','District','Mobile Name','Signature','Live Photo'];
+  // All 12 columns total exactly 786 points, including the live photo.
+  const cols=[22,80,92,34,55,68,50,52,48,65,100,120];
+  const headers=['No.','Full Name','Email Address','Gender','Designation','Organisation','Phone','NRC Number','District','Mobile Name','Signature','Live Photo'];
   const tableX=28, pageBottom=535, headerH=20, rowH=21, rowsPerPage=20;
 
   function pageWatermark(){
@@ -628,6 +630,7 @@ async function makePdf(event,attendees,filePath){
     const vals=[
       index+1,
       a.full_name,
+      a.email_address,
       a.gender,
       a.designation,
       a.organisation,
@@ -641,18 +644,18 @@ async function makePdf(event,attendees,filePath){
     let x=tableX;
     for (const [i, v] of vals.entries()) {
       doc.rect(x,y,cols[i],rowH).stroke();
-      if(i===9){
+      if(i===10){
         if(a.signature_file) {
           try { doc.image(await getStoredImage(a.signature_file),x+4,y+4,{fit:[cols[i]-8,rowH-8],align:'center',valign:'center'}); }
           catch(imageErr) { console.error('Skipping unreadable signature image for attendee',a.id,imageErr.message); }
         }
-      } else if(i===10){
+      } else if(i===11){
         if(a.photo_file) {
           try { doc.image(await getStoredImage(a.photo_file),x+4,y+2,{fit:[cols[i]-8,rowH-4],align:'center',valign:'center'}); }
           catch(imageErr) { console.error('Skipping unreadable live photo for attendee',a.id,imageErr.message); }
         }
       } else {
-        fitText(doc,v,x+2,y+5,cols[i]-4,{size:i===1?5.7:5.5,height:11,align:i===0?'center':'left'});
+        fitText(doc,v,x+2,y+5,cols[i]-4,{size:i===1||i===2?5.2:5.5,height:11,align:i===0?'center':'left'});
       }
       x+=cols[i];
     }
