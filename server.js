@@ -319,7 +319,6 @@ app.post('/api/attendees', async (req, res) => {
   const b = req.body;
   const required = ['fullName','emailAddress','gender','designation','organisation','phoneNumber','nrcNumber','district','mobileRegisteredName','signature','livePhoto'];
   if (required.some(k => !String(b[k] || '').trim())) return res.status(400).json({ error: 'Please complete all required fields.' });
-  if (b.photoVerified !== true) return res.status(400).json({ error: 'The live photo must pass face, lighting and clarity verification before registration.' });
   const event = b.eventSlug ? await findEventBySlug(b.eventSlug) : await db.getLatestEvent();
   if (!event) return res.status(400).json({ error: 'No event is available for registration.' });
   if (isRegistrationExpired(event)) return res.status(410).json({ error: 'Registration for this event has expired. Please contact the event administrator.' });
@@ -351,7 +350,7 @@ app.post('/api/attendees', async (req, res) => {
   let photoFile;
   try {
     signatureFile = await saveSignature(String(b.signature), uploadId);
-    photoFile = await saveLivePhoto(String(b.livePhoto), uploadId);
+    if (b.livePhoto) photoFile = await saveLivePhoto(String(b.livePhoto), uploadId);
   } catch (e) {
     // Clean up a partial image if either image fails validation.
     for (const filename of [signatureFile, photoFile]) {
