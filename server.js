@@ -227,6 +227,8 @@ async function makeQrPdfBuffer(event, link) {
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true }));
 const databaseReady = db.initializeDatabase(loadLegacyData());
+let databaseInitializationError = null;
+databaseReady.catch(err => { databaseInitializationError = err; });
 app.use((req, res, next) => {
   // Keep the health endpoint available when database initialization itself
   // fails so deployments can report the actual dependency failure.
@@ -317,6 +319,7 @@ app.post('/api/attendees', async (req, res) => {
   const b = req.body;
   const required = ['fullName','emailAddress','gender','designation','organisation','phoneNumber','nrcNumber','district','mobileRegisteredName','signature','livePhoto'];
   if (required.some(k => !String(b[k] || '').trim())) return res.status(400).json({ error: 'Please complete all required fields.' });
+  if (b.photoVerified !== true) return res.status(400).json({ error: 'The live photo must pass face, lighting and clarity verification before registration.' });
   const event = b.eventSlug ? await findEventBySlug(b.eventSlug) : await db.getLatestEvent();
   if (!event) return res.status(400).json({ error: 'No event is available for registration.' });
   if (isRegistrationExpired(event)) return res.status(410).json({ error: 'Registration for this event has expired. Please contact the event administrator.' });
@@ -340,6 +343,8 @@ app.post('/api/attendees', async (req, res) => {
   const accuracy = b.accuracy === undefined || b.accuracy === null ? null : Number(b.accuracy);
   const hasValidGps = Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
   if (!hasValidGps) return res.status(400).json({ error: 'GPS location is required. Registration is blocked until location permission is granted and valid coordinates are available. No attendee details have been saved.' });
+  const capturedAt = Date.parse(String(b.locationCapturedAt || ''));
+  if (!Number.isFinite(accuracy) || accuracy < 0 || !Number.isFinite(capturedAt) || Math.abs(Date.now() - capturedAt) > 5 * 60 * 1000) return res.status(400).json({ error: 'A fresh GPS capture with valid accuracy is required. Please allow location access and try again.' });
   const confirmationToken = crypto.randomBytes(32).toString('hex');
   const uploadId = crypto.randomUUID();
   let signatureFile;
@@ -742,6 +747,15 @@ app.get('/api/user/events/:id/pdf', requireUser, async (req,res) => {
 app.use((req,res,next)=>{if(req.method==='GET'&&req.accepts('html'))return res.status(404).sendFile(path.join(PUBLIC_DIR,'404.html'));next();});
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
+
+  // Database initialization is a deployment dependency. Report it as such
+  // instead of presenting the generic 500 response for every page/API request.
+  if (databaseInitializationError) {
+    console.error('Request unavailable because Neon database initialization failed:', databaseInitializationError.message);
+    return res.status(503).json({
+      error: 'The database is unavailable. Check DATABASE_URL in the Vercel project environment and confirm the Neon database is reachable.',
+    });
+  }
 
   const errorStatus = err.statusCode || err.status;
   const status = Number.isInteger(errorStatus) && errorStatus >= 400 && errorStatus < 500
