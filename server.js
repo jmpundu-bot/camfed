@@ -207,7 +207,7 @@ async function buildCsv(event) {
   return '\uFEFF' + rows.map(row => row.map(csvCell).join(',')).join('\r\n');
 }
 async function makeQrPdfBuffer(event, link) {
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&format=png&data=${encodeURIComponent(link)}`;
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=1200x1200&format=png&data=${encodeURIComponent(link)}`;
   const response = await fetch(qrUrl);
   if (!response.ok) throw new Error('Could not retrieve the QR code image. Check the server internet connection and try again.');
   const qrBuffer = Buffer.from(await response.arrayBuffer());

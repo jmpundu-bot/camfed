@@ -22,7 +22,7 @@ async function copyLink(slug){const link=location.origin+'/register/'+slug;try{a
 function readImageData(blob){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('Unable to read an image for the QR PDF.'));reader.readAsDataURL(blob);});}
 async function downloadQrPdf(name,date,venue,slug){
   const link=location.origin+'/register/'+slug;
-  const qrUrl='https://api.qrserver.com/v1/create-qr-code/?size=600x600&format=png&data='+encodeURIComponent(link);
+  const qrUrl='https://api.qrserver.com/v1/create-qr-code/?size=1200x1200&format=png&data='+encodeURIComponent(link);
   try {
     const [response,logoResponse]=await Promise.all([fetch(qrUrl),fetch('/images/camfed-logo.png')]);
     if(!response.ok)throw Error('Could not generate QR code. Check your internet connection and try again.');
