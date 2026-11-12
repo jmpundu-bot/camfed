@@ -139,6 +139,7 @@ function findEventBySlug(slug) { return db.getEventBySlug(slug); }
 const DEFAULT_REGISTRATION_HOURS = 2;
 const MAX_REGISTRATION_HOURS = 720; // 30 days
 const PROVINCES = ['Lusaka', 'Western', 'Central', 'Muchinga', 'Luapula', 'Northern', 'Eastern'];
+const MIN_PROVINCIAL_USERS_PER_PROVINCE = 4;
 function requestedProvince(value) { return PROVINCES.includes(String(value || '')) ? String(value) : null; }
 function provinceForRequest(req) {
   if (req.auth?.role === 'user') return req.auth.province;
@@ -467,7 +468,7 @@ app.post('/api/admin/users', requireAdmin, requirePrimaryAdmin, async (req,res) 
   try { res.status(201).json(await db.createProvincialUser({ username, province, password_salt:salt, password_hash:passwordHash, created_at:new Date().toISOString() })); }
   catch (err) { if (err.code === '23505') return res.status(409).json({error:'That username is already in use.'}); throw err; }
 });
-app.patch('/api/admin/users/:id', requireAdmin, async (req,res) => {
+app.patch('/api/admin/users/:id', requireAdmin, requirePrimaryAdmin, async (req,res) => {
   const username = String(req.body.username || '').trim();
   const province = requestedProvince(req.body.province);
   const password = String(req.body.password || '');
@@ -475,7 +476,13 @@ app.patch('/api/admin/users/:id', requireAdmin, async (req,res) => {
   if (await db.getAdminUser(username)) return res.status(409).json({error:'That email is already assigned to an admin account.'});
   if (!province) return res.status(400).json({error:'Select a valid province.'});
   if (password && password.length < 10) return res.status(400).json({error:'Password must be at least 10 characters.'});
-  const duplicate = (await db.listProvincialUsers()).find(user => user.username.toLowerCase() === username.toLowerCase() && user.id !== Number(req.params.id));
+  const users = await db.listProvincialUsers();
+  const existingUser = users.find(user => user.id === Number(req.params.id));
+  if (!existingUser) return res.status(404).json({error:'Provincial user not found.'});
+  if (existingUser.province !== province && users.filter(user => user.province === existingUser.province).length <= MIN_PROVINCIAL_USERS_PER_PROVINCE) {
+    return res.status(409).json({error:`${existingUser.province} must keep at least ${MIN_PROVINCIAL_USERS_PER_PROVINCE} provincial user accounts.`});
+  }
+  const duplicate = users.find(user => user.username.toLowerCase() === username.toLowerCase() && user.id !== Number(req.params.id));
   if (duplicate) return res.status(409).json({error:'That username is already in use.'});
   let password_salt = null, password_hash = null;
   if (password) { password_salt = crypto.randomBytes(16).toString('hex'); password_hash = await new Promise((resolve,reject)=>crypto.scrypt(password,password_salt,64,(err,key)=>err?reject(err):resolve(key.toString('hex')))); }
@@ -483,7 +490,13 @@ app.patch('/api/admin/users/:id', requireAdmin, async (req,res) => {
   if (!user) return res.status(404).json({error:'Provincial user not found.'});
   res.json(user);
 });
-app.delete('/api/admin/users/:id', requireAdmin, async (req,res) => {
+app.delete('/api/admin/users/:id', requireAdmin, requirePrimaryAdmin, async (req,res) => {
+  const users = await db.listProvincialUsers();
+  const user = users.find(account => account.id === Number(req.params.id));
+  if (!user) return res.status(404).json({error:'Provincial user not found.'});
+  if (users.filter(account => account.province === user.province).length <= MIN_PROVINCIAL_USERS_PER_PROVINCE) {
+    return res.status(409).json({error:`${user.province} must keep at least ${MIN_PROVINCIAL_USERS_PER_PROVINCE} provincial user accounts.`});
+  }
   if (!await db.deleteProvincialUser(req.params.id)) return res.status(404).json({error:'Provincial user not found.'});
   res.json({message:'Provincial user deleted.'});
 });
