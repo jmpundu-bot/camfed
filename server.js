@@ -3,6 +3,7 @@ const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const db = require('./lib/db');
 const { getSql } = db;
 const neonStorage = require('./lib/neon-storage');
@@ -106,8 +107,52 @@ async function saveSignature(dataUrl, attendeeId) {
   if (!/^data:image\/png;base64,/.test(dataUrl || '')) throw new Error('Invalid signature image.');
   const buffer = Buffer.from(dataUrl.replace(/^data:image\/png;base64,/, ''), 'base64');
   if (buffer.length < 100 || buffer.length > 2 * 1024 * 1024) throw new Error('Signature image size is invalid.');
+  if (!isClearSignaturePng(buffer)) throw new Error('Your signature is too small, faint, or unclear. Please provide a larger, darker signature and try again.');
   const filename = `signature-${attendeeId}-${Date.now()}.png`;
   return storeImage(filename, buffer, 'image/png');
+}
+function isClearSignaturePng(buffer) {
+  // Browser canvas exports 8-bit RGBA PNGs. Decode the pixels so API callers
+  // receive the same size and visibility checks as users of the registration page.
+  try {
+    if (buffer.toString('hex', 0, 8) !== '89504e470d0a1a0a') return false;
+    let offset = 8, width, height, bitDepth, colorType;
+    const compressed = [];
+    while (offset + 12 <= buffer.length) {
+      const length = buffer.readUInt32BE(offset), type = buffer.toString('ascii', offset + 4, offset + 8);
+      if (length > buffer.length - offset - 12) return false;
+      const data = buffer.subarray(offset + 8, offset + 8 + length);
+      if (type === 'IHDR') { width=data.readUInt32BE(0); height=data.readUInt32BE(4); bitDepth=data[8]; colorType=data[9]; }
+      if (type === 'IDAT') compressed.push(data);
+      offset += length + 12;
+      if (type === 'IEND') break;
+    }
+    if (!width || !height || width > 2000 || height > 1000 || bitDepth !== 8 || colorType !== 6) return false;
+    const minWidth = Math.ceil(width * 0.09), minHeight = Math.ceil(height * 0.067), stride = width * 4;
+    const raw = zlib.inflateSync(Buffer.concat(compressed), { maxOutputLength: (stride + 1) * height });
+    if (raw.length !== (stride + 1) * height) return false;
+    let minX=width, minY=height, maxX=-1, maxY=-1, visible=0;
+    const prev = Buffer.alloc(stride);
+    for (let y=0; y<height; y++) {
+      const rowStart=y*(stride+1), filter=raw[rowStart];
+      if (filter > 4) return false;
+      const row=Buffer.from(raw.subarray(rowStart+1,rowStart+1+stride));
+      for(let i=0;i<stride;i++) {
+        const a=i>=4?row[i-4]:0, b=prev[i], c=i>=4?prev[i-4]:0;
+        let predictor=0;
+        if(filter===1) predictor=a;
+        else if(filter===2) predictor=b;
+        else if(filter===3) predictor=Math.floor((a+b)/2);
+        else if(filter===4) { const p=a+b-c, pa=Math.abs(p-a), pb=Math.abs(p-b), pc=Math.abs(p-c); predictor=pa<=pb&&pa<=pc?a:pb<=pc?b:c; }
+        row[i]=(row[i]+predictor)&255;
+      }
+      for(let x=0;x<width;x++) { const i=x*4, alpha=row[i+3];
+        if(alpha>=160 && (row[i]+row[i+1]+row[i+2])/3<=150) { visible++; minX=Math.min(minX,x); maxX=Math.max(maxX,x); minY=Math.min(minY,y); maxY=Math.max(maxY,y); }
+      }
+      row.copy(prev);
+    }
+    return visible >= Math.max(100, Math.ceil(width*height*0.0004)) && maxX-minX+1 >= minWidth && maxY-minY+1 >= minHeight;
+  } catch (_) { return false; }
 }
 async function saveLivePhoto(dataUrl, attendeeId) {
   if (!/^data:image\/(jpeg|jpg|png);base64,/.test(dataUrl || '')) throw new Error('Invalid live photo image.');
