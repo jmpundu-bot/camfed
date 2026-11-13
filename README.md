@@ -47,7 +47,7 @@ This distribution ZIP starts with an empty data store and does not include previ
 
 ## Live photo capture
 
-Attendees must capture a live photo with the device camera to register. Face, lighting, and clarity verification is not required. The photo is included as a **Live Photo** column in the generated A4 landscape attendance PDF. Existing attendee records without a photo have a blank photo cell.
+Attendees must capture a live photo with the device camera to register. The registration page checks lighting and clarity, then detects a prominent face with MediaPipe running in the browser; it does not depend on the browser's native face detection API. A classic-script MediaPipe detector is used if the task module is unavailable. Registration remains blocked if photo quality or face detection cannot be verified. Detector assets load from jsDelivr and the MediaPipe model host, so those hosts must be reachable during registration. The photo is included as a **Live Photo** column in the generated A4 landscape attendance PDF. Existing attendee records without a photo have a blank photo cell.
 
 Camera access requires HTTPS on the deployed site (Vercel provides HTTPS) or localhost during local development. Explain to attendees why photos are collected and restrict access to the stored photos. Signature images and live photos are uploaded to a private Neon Object Storage bucket when configured. On Vercel, set `AWS_ENDPOINT_URL_S3`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `NEON_STORAGE_BUCKET`, and `AWS_REGION` from the Neon storage guide. The Neon credential needs `storage:read` and `storage:write` scopes. Keep the bucket private.
 
